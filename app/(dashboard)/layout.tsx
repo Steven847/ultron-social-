@@ -4,7 +4,7 @@ import { LayoutDashboard, Briefcase, Image, Calendar, MessageSquare, Settings } 
 const navigation = [
   { name: "Übersicht", href: "/", icon: LayoutDashboard, ready: true },
   { name: "Marken", href: "/brands", icon: Briefcase, ready: true },
-  { name: "Medien", href: "/media", icon: Image, ready: false, version: "v0.2" },
+  { name: "Medien", href: "/media", icon: Image, ready: true },
   { name: "Planung", href: "/schedule", icon: Calendar, ready: false, version: "v0.4" },
   { name: "Engagement", href: "/engagement", icon: MessageSquare, ready: false, version: "v0.5" },
   { name: "Einstellungen", href: "/settings", icon: Settings, ready: false, version: "v0.6" },
@@ -13,7 +13,6 @@ const navigation = [
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
-      {/* Sidebar */}
       <aside className="hidden lg:flex w-64 flex-col bg-card border-r">
         <div className="p-6 border-b">
           <div className="flex items-center gap-3">
@@ -43,12 +42,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </Link>
           ))}
         </nav>
-        <div className="p-4 border-t text-xs text-muted-foreground">
-          v0.1.0 — Foundation
-        </div>
+        <div className="p-4 border-t text-xs text-muted-foreground">v0.2.0 — Content Studio</div>
       </aside>
 
-      {/* Main content */}
       <main className="flex-1 overflow-y-auto">{children}</main>
     </div>
   );

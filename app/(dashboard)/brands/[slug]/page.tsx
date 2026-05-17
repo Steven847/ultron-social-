@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { getServerClient } from "@/lib/supabase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Upload, Image as ImageIcon, Calendar, MessageSquare, Settings as SettingsIcon } from "lucide-react";
+import { ArrowLeft, Image as ImageIcon, Calendar, MessageSquare, Settings as SettingsIcon } from "lucide-react";
 import type { Brand } from "@/lib/types";
 import LogoUploader from "./logo-uploader";
 
@@ -13,10 +13,22 @@ async function getBrand(slug: string): Promise<Brand | null> {
   return data as Brand | null;
 }
 
+async function getMediaCount(brandId: string) {
+  const supabase = getServerClient();
+  const { count } = await supabase
+    .from("media")
+    .select("*", { count: "exact", head: true })
+    .eq("brand_id", brandId)
+    .eq("archived", false);
+  return count || 0;
+}
+
 export default async function BrandDetailPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const brand = await getBrand(slug);
   if (!brand) notFound();
+
+  const mediaCount = await getMediaCount(brand.id);
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -31,7 +43,13 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
       <Card className="mb-6">
         <CardHeader>
           <div className="flex items-start gap-4">
-            <LogoUploader brandId={brand.id} brandSlug={brand.slug} currentLogo={brand.logo_url} brandName={brand.name} primaryColor={brand.primary_color || "#1B5E20"} />
+            <LogoUploader
+              brandId={brand.id}
+              brandSlug={brand.slug}
+              currentLogo={brand.logo_url}
+              brandName={brand.name}
+              primaryColor={brand.primary_color || "#1B5E20"}
+            />
             <div className="flex-1">
               <CardTitle className="text-2xl">{brand.name}</CardTitle>
               <CardDescription className="mt-1">@{brand.slug}</CardDescription>
@@ -55,18 +73,23 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
         </CardHeader>
       </Card>
 
-      {/* Feature cards (Coming Soon for v0.1) */}
+      {/* Feature cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="opacity-60">
-          <CardHeader>
-            <ImageIcon className="w-8 h-8 mb-2 text-primary" />
-            <CardTitle className="text-lg">Medien</CardTitle>
-            <CardDescription>Upload + KI-Generierung</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">Kommt in v0.2</p>
-          </CardContent>
-        </Card>
+        <Link href={`/brands/${brand.slug}/media`}>
+          <Card className="hover:shadow-md hover:border-primary transition-all cursor-pointer h-full">
+            <CardHeader>
+              <ImageIcon className="w-8 h-8 mb-2 text-primary" />
+              <CardTitle className="text-lg">Medien</CardTitle>
+              <CardDescription>Upload + KI-Generierung</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xs">
+                <span className="font-bold text-primary">{mediaCount}</span>{" "}
+                <span className="text-muted-foreground">Medien in Bibliothek</span>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
 
         <Card className="opacity-60">
           <CardHeader>
@@ -75,7 +98,7 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
             <CardDescription>Multi-Plattform Scheduling</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-xs text-muted-foreground">Kommt in v0.3</p>
+            <p className="text-xs text-muted-foreground">Kommt in v0.4</p>
           </CardContent>
         </Card>
 
@@ -86,7 +109,7 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
             <CardDescription>Hashtags + Kommentare</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-xs text-muted-foreground">Kommt in v0.3</p>
+            <p className="text-xs text-muted-foreground">Kommt in v0.5</p>
           </CardContent>
         </Card>
 
@@ -103,7 +126,10 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
                   <div className="font-semibold mb-1">Haupt-Hashtags:</div>
                   <div className="flex flex-wrap gap-1">
                     {brand.primary_hashtags.slice(0, 3).map((tag) => (
-                      <span key={tag} className="px-2 py-0.5 rounded-full bg-accent text-accent-foreground">
+                      <span
+                        key={tag}
+                        className="px-2 py-0.5 rounded-full bg-accent text-accent-foreground"
+                      >
                         {tag}
                       </span>
                     ))}
