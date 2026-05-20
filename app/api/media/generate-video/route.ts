@@ -1,97 +1,198 @@
-// app/api/media/generate-video/route.ts — Generate AI video and save to library
+// app/api/media/generate-video/route.ts — Video generation with job tracking
+// Returns jobId immediately so client can poll progress
+// Processes in background using waitUntil() pattern (or just async)
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/supabase";
 import { generateVideo } from "@/lib/gemini";
+import { createJob, updateJobPhase, completeJob, failJob, type JobType } from "@/lib/job-tracker";
 import type { Brand } from "@/lib/types";
 
-// Veo can take 1-3 minutes, allow longer timeout
 export const maxDuration = 300;
 
+const MAX_START_IMAGE_MB = 10;
+
 export async function POST(req: NextRequest) {
+  let jobId: string | null = null;
+  let jobType: JobType = "video";
+
   try {
     const body = await req.json();
-    const { brandId, prompt, aspectRatio, duration, title, tags } = body;
+    const {
+      brandId,
+      prompt,
+      aspectRatio,
+      duration,
+      title,
+      tags,
+      startImageMediaId,
+    } = body;
 
     if (!brandId || !prompt) {
       return NextResponse.json({ error: "brandId und prompt erforderlich" }, { status: 400 });
     }
 
-    const supabase = getServerClient();
+    jobType = startImageMediaId ? "video-i2v" : "video";
 
-    // Load brand
-    const { data: brand } = await supabase
-      .from("brands")
-      .select("*")
-      .eq("id", brandId)
-      .single();
-    if (!brand) {
-      return NextResponse.json({ error: "Marke nicht gefunden" }, { status: 404 });
-    }
+    // Create job FIRST so client can poll immediately
+    jobId = await createJob(brandId, jobType, { prompt: prompt.slice(0, 200) });
 
-    // Generate via Veo (returns Google-hosted URL)
-    const result = await generateVideo(prompt, brand as Brand, {
-      aspectRatio: aspectRatio || "9:16",
-      durationSeconds: (duration || 8) as 4 | 6 | 8,
+    // Start processing — but return jobId quickly so client can start polling
+    // Note: in Vercel-style serverless, we run the work in this same request
+    // (no separate background worker). Client polls /api/jobs/[id] for updates.
+    const result = await processVideoGeneration({
+      jobId,
+      jobType,
+      brandId,
+      prompt,
+      aspectRatio,
+      duration,
+      title,
+      tags,
+      startImageMediaId,
     });
 
-    if (!result.url) {
-      return NextResponse.json({ error: "Veo lieferte keine Video-URL" }, { status: 500 });
-    }
+    return NextResponse.json({
+      success: true,
+      jobId,
+      media: result.media,
+      imageToVideo: !!startImageMediaId,
+    });
+  } catch (error: any) {
+    console.error("[generate-video] ERROR:", error.message);
+    if (jobId) await failJob(jobId, error.message);
+    return NextResponse.json(
+      { error: error.message, jobId },
+      { status: 500 }
+    );
+  }
+}
 
-    // Download video from Google and re-upload to our storage
-    const apiKey = process.env.GEMINI_API_KEY!;
-    const separator = result.url.includes("?") ? "&" : "?";
-    const downloadUrl = result.url + separator + "key=" + apiKey;
+async function processVideoGeneration(params: {
+  jobId: string;
+  jobType: JobType;
+  brandId: string;
+  prompt: string;
+  aspectRatio?: string;
+  duration?: number;
+  title?: string;
+  tags?: string;
+  startImageMediaId?: string;
+}) {
+  const { jobId, jobType, brandId, prompt, aspectRatio, duration, title, tags, startImageMediaId } = params;
+  const supabase = getServerClient();
 
-    const videoRes = await fetch(downloadUrl);
-    if (!videoRes.ok) {
-      return NextResponse.json(
-        { error: "Video-Download fehlgeschlagen: " + videoRes.status },
-        { status: 500 }
-      );
-    }
-    const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+  const { data: brand } = await supabase.from("brands").select("*").eq("id", brandId).single();
+  if (!brand) throw new Error("Marke nicht gefunden");
 
-    // Save to storage
-    const filePath = `${brand.slug}/generated/${Date.now()}-video.mp4`;
-    const { error: uploadError } = await supabase.storage
-      .from("ai-generated")
-      .upload(filePath, videoBuffer, {
-        contentType: "video/mp4",
-        upsert: false,
-      });
+  let startImageBase64: string | undefined;
+  let startImageMimeType: string | undefined;
+  let aiRefinedFrom: string | null = null;
+  let sourceWasUpload = false;
 
-    if (uploadError) throw uploadError;
+  if (startImageMediaId) {
+    await updateJobPhase(jobId, jobType, "loading-image");
 
-    // Parse tags
-    const tagArr = (tags || "")
-      .split(",")
-      .map((t: string) => t.trim())
-      .filter(Boolean);
-
-    // Insert metadata
-    const { data: mediaRow, error: insertError } = await supabase
+    const { data: startMedia } = await supabase
       .from("media")
-      .insert({
-        brand_id: brandId,
-        type: "video",
-        source: "ai_generated",
-        storage_path: filePath,
-        file_size: videoBuffer.length,
-        duration_seconds: duration || 8,
-        ai_prompt: result.fullPrompt,
-        ai_model: "veo-2.0-generate-001",
-        title: title || `KI-Video: ${prompt.slice(0, 50)}`,
-        tags: tagArr.length > 0 ? tagArr : null,
-      })
-      .select()
+      .select("*")
+      .eq("id", startImageMediaId)
       .single();
 
-    if (insertError) throw insertError;
+    if (!startMedia || startMedia.type !== "image") {
+      throw new Error("Start-Bild nicht gefunden oder kein Bild");
+    }
 
-    return NextResponse.json({ success: true, media: mediaRow });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const bucket = startMedia.source === "upload" ? "media-uploads" : "ai-generated";
+    const { data: blob, error: dlError } = await supabase.storage
+      .from(bucket)
+      .download(startMedia.storage_path);
+
+    if (dlError || !blob) {
+      throw new Error("Start-Bild konnte nicht geladen werden");
+    }
+
+    const sizeMB = blob.size / (1024 * 1024);
+    if (sizeMB > MAX_START_IMAGE_MB) {
+      throw new Error(`Start-Bild ist ${sizeMB.toFixed(1)} MB groß. Max ${MAX_START_IMAGE_MB} MB.`);
+    }
+
+    const arrayBuffer = await blob.arrayBuffer();
+    startImageBase64 = Buffer.from(arrayBuffer).toString("base64");
+    startImageMimeType = blob.type || "image/jpeg";
+    aiRefinedFrom = startImageMediaId;
+    sourceWasUpload = startMedia.source === "upload";
+
+    console.log(`[generate-video] Image-to-video with ${sizeMB.toFixed(2)} MB`);
   }
+
+  // Submit to Veo
+  await updateJobPhase(jobId, jobType, "submitting");
+  console.log("[generate-video] Submitting to Veo...");
+
+  // Track rendering phase — Veo's poll happens inside generateVideo()
+  await updateJobPhase(jobId, jobType, "rendering");
+
+  const videoAspect = (aspectRatio || "9:16") as "9:16" | "16:9";
+  const result = await generateVideo(prompt, brand as Brand, {
+    aspectRatio: videoAspect,
+    durationSeconds: (duration || 8) as 4 | 6 | 8,
+    startImageBase64,
+    startImageMimeType,
+  });
+
+  if (!result.url) throw new Error("Veo lieferte keine Video-URL");
+
+  // Download
+  await updateJobPhase(jobId, jobType, "downloading");
+  const apiKey = process.env.GEMINI_API_KEY!;
+  const separator = result.url.includes("?") ? "&" : "?";
+  const downloadUrl = result.url + separator + "key=" + apiKey;
+
+  const videoRes = await fetch(downloadUrl);
+  if (!videoRes.ok) throw new Error("Video-Download fehlgeschlagen: " + videoRes.status);
+  const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+
+  // Upload to storage
+  await updateJobPhase(jobId, jobType, "uploading");
+  const filePath = `${brand.slug}/generated/${Date.now()}-video.mp4`;
+  const { error: uploadError } = await supabase.storage
+    .from("ai-generated")
+    .upload(filePath, videoBuffer, {
+      contentType: "video/mp4",
+      upsert: false,
+    });
+
+  if (uploadError) throw uploadError;
+
+  // Insert media row
+  await updateJobPhase(jobId, jobType, "saving");
+  const tagArr = (tags || "")
+    .split(",")
+    .map((t: string) => t.trim())
+    .filter(Boolean);
+  if (startImageMediaId) tagArr.push("image-to-video");
+
+  const { data: mediaRow, error: insertError } = await supabase
+    .from("media")
+    .insert({
+      brand_id: brandId,
+      type: "video",
+      source: sourceWasUpload ? "hybrid" : "ai_generated",
+      storage_path: filePath,
+      file_size: videoBuffer.length,
+      duration_seconds: duration || 8,
+      ai_prompt: result.fullPrompt,
+      ai_model: "veo-2.0-generate-001",
+      ai_refined_from: aiRefinedFrom,
+      title: title || `KI-Video: ${prompt.slice(0, 50)}`,
+      tags: tagArr.length > 0 ? tagArr : null,
+    })
+    .select()
+    .single();
+
+  if (insertError) throw insertError;
+
+  await completeJob(jobId, mediaRow.id);
+  return { media: mediaRow };
 }

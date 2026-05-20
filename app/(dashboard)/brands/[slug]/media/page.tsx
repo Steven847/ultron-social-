@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getServerClient } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Upload, Sparkles } from "lucide-react";
+import { ArrowLeft, Upload, Sparkles, FileText, Type } from "lucide-react";
 import type { Brand } from "@/lib/types";
 import MediaGrid from "@/components/media/media-grid";
 import UploadDialog from "@/components/media/upload-dialog";
@@ -42,12 +42,22 @@ export default async function BrandMediaPage({ params }: { params: Promise<{ slu
           )}
           <div>
             <h1 className="text-2xl font-bold">{brand.name} — Medien</h1>
-            <p className="text-sm text-muted-foreground">
-              Upload + KI-Generierung mit Brand-Kontext
-            </p>
+            <p className="text-sm text-muted-foreground">Upload + KI-Generierung mit Brand-Kontext</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brand.slug}/editor`}>
+              <Type className="w-4 h-4" />
+              Text-Editor
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brand.slug}/composer`}>
+              <FileText className="w-4 h-4" />
+              Composer
+            </Link>
+          </Button>
           <UploadDialog
             brandId={brand.id}
             trigger={
@@ -59,6 +69,7 @@ export default async function BrandMediaPage({ params }: { params: Promise<{ slu
           />
           <GenerateDialog
             brandId={brand.id}
+            brandLogoUrl={brand.logo_url}
             trigger={
               <Button>
                 <Sparkles className="w-4 h-4" />
@@ -69,7 +80,7 @@ export default async function BrandMediaPage({ params }: { params: Promise<{ slu
         </div>
       </div>
 
-      <MediaGrid brandId={brand.id} />
+      <MediaGrid brandId={brand.id} brandSlug={brand.slug} />
     </div>
   );
 }

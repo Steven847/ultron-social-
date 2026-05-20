@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -15,6 +16,8 @@ import {
   Film,
   Wand2,
   Link as LinkIcon,
+  FileText,
+  Type,
 } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
 
@@ -38,10 +41,11 @@ interface MediaItem {
 
 interface Props {
   brandId?: string;
+  brandSlug?: string;
   showBrandColumn?: boolean;
 }
 
-export default function MediaGrid({ brandId, showBrandColumn }: Props) {
+export default function MediaGrid({ brandId, brandSlug, showBrandColumn }: Props) {
   const router = useRouter();
   const [items, setItems] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -138,6 +142,8 @@ export default function MediaGrid({ brandId, showBrandColumn }: Props) {
       setRefineProgress(null);
     }
   };
+
+  const composerSlug = selected?.brands?.slug || brandSlug;
 
   return (
     <div className="space-y-4">
@@ -249,7 +255,6 @@ export default function MediaGrid({ brandId, showBrandColumn }: Props) {
         </div>
       )}
 
-      {/* Detail modal with refine */}
       {selected && (
         <div
           className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
@@ -300,6 +305,26 @@ export default function MediaGrid({ brandId, showBrandColumn }: Props) {
                 </div>
               </div>
 
+              {/* QUICK ACTIONS */}
+              {composerSlug && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Button asChild>
+                    <Link href={`/brands/${composerSlug}/composer?media=${selected.id}`}>
+                      <FileText className="w-4 h-4" />
+                      Caption + Hashtags
+                    </Link>
+                  </Button>
+                  {selected.type === "image" && (
+                    <Button asChild variant="secondary">
+                      <Link href={`/brands/${composerSlug}/editor?media=${selected.id}`}>
+                        <Type className="w-4 h-4" />
+                        In Text-Editor öffnen
+                      </Link>
+                    </Button>
+                  )}
+                </div>
+              )}
+
               {selected.tags && selected.tags.length > 0 && (
                 <div>
                   <div className="text-xs font-semibold mb-1 text-muted-foreground uppercase">Tags</div>
@@ -322,7 +347,6 @@ export default function MediaGrid({ brandId, showBrandColumn }: Props) {
                 </div>
               )}
 
-              {/* REFINE SECTION */}
               <div className="border rounded-lg p-4 bg-accent/30">
                 <div className="flex items-center gap-2 mb-2">
                   <Wand2 className="w-4 h-4 text-primary" />

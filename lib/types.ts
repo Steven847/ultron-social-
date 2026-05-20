@@ -5,6 +5,8 @@ export type MediaType = "image" | "video";
 export type MediaSource = "upload" | "ai_generated" | "hybrid";
 export type PostType = "post" | "story" | "reel" | "carousel";
 export type PostStatus = "draft" | "scheduled" | "published" | "failed" | "archived";
+export type CaptionTone = "witzig" | "informativ" | "frech" | "herzlich" | "professionell" | "inspirierend";
+export type CaptionLength = "kurz" | "mittel" | "lang";
 
 export interface Brand {
   id: string;
@@ -59,6 +61,8 @@ export interface Media {
   ai_prompt: string | null;
   ai_model: string | null;
   ai_refined_from: string | null;
+  ai_description: string | null;
+  ai_description_at: string | null;
   title: string | null;
   description: string | null;
   used_count: number;
@@ -72,6 +76,8 @@ export interface Post {
   id: string;
   brand_id: string;
   type: PostType;
+  title: string | null;
+  tone: string | null;
   caption: string | null;
   hashtags: string[] | null;
   first_comment: string | null;
@@ -83,8 +89,26 @@ export interface Post {
   error_message: string | null;
   week_plan_id: string | null;
   day_of_week: number | null;
+  source_caption_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CaptionHistoryEntry {
+  id: string;
+  brand_id: string;
+  caption: string;
+  hashtags: string[] | null;
+  first_comment: string | null;
+  topic: string | null;
+  tone: string | null;
+  length_category: string | null;
+  variant_group: string | null;
+  media_id: string | null;
+  performance_score: number | null;
+  used_in_post: string | null;
+  is_favorite: boolean;
+  created_at: string;
 }
 
 export interface WeekPlan {

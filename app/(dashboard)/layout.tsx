@@ -1,13 +1,22 @@
 import Link from "next/link";
-import { LayoutDashboard, Briefcase, Image, Calendar, MessageSquare, Settings } from "lucide-react";
+import {
+  LayoutDashboard,
+  Briefcase,
+  Image,
+  FileText,
+  Calendar,
+  MessageSquare,
+  Settings,
+} from "lucide-react";
 
 const navigation = [
   { name: "Übersicht", href: "/", icon: LayoutDashboard, ready: true },
   { name: "Marken", href: "/brands", icon: Briefcase, ready: true },
   { name: "Medien", href: "/media", icon: Image, ready: true },
-  { name: "Planung", href: "/schedule", icon: Calendar, ready: false, version: "v0.4" },
-  { name: "Engagement", href: "/engagement", icon: MessageSquare, ready: false, version: "v0.5" },
-  { name: "Einstellungen", href: "/settings", icon: Settings, ready: false, version: "v0.6" },
+  { name: "Entwürfe", href: "/drafts", icon: FileText, ready: true },
+  { name: "Planung", href: "/schedule", icon: Calendar, ready: false, version: "v0.7" },
+  { name: "Engagement", href: "/engagement", icon: MessageSquare, ready: false, version: "v0.8" },
+  { name: "Einstellungen", href: "/settings", icon: Settings, ready: false, version: "v0.9" },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -42,7 +51,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </Link>
           ))}
         </nav>
-        <div className="p-4 border-t text-xs text-muted-foreground">v0.2.0 — Content Studio</div>
+        <div className="p-4 border-t text-xs text-muted-foreground">v0.4.0 — Text Editor</div>
       </aside>
 
       <main className="flex-1 overflow-y-auto">{children}</main>

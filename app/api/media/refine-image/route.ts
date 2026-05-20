@@ -1,14 +1,26 @@
 // app/api/media/refine-image/route.ts — Refine an existing image with feedback
+// v0.2.2: supports optional logo overlay on the refined result
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/supabase";
-import { generateImage } from "@/lib/gemini";
+import { generateImage, type ReferenceImage } from "@/lib/gemini";
+import { composeWithLogo, type LogoPosition, type LogoSize } from "@/lib/logo-overlay";
 import type { Brand } from "@/lib/types";
+
+export const maxDuration = 180;
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { mediaId, feedback, aspectRatio } = body;
+    const {
+      mediaId,
+      feedback,
+      aspectRatio,
+      includeLogo,
+      logoPosition,
+      logoSize,
+      logoOpacity,
+    } = body;
 
     if (!mediaId || !feedback?.trim()) {
       return NextResponse.json({ error: "mediaId und feedback erforderlich" }, { status: 400 });
@@ -16,7 +28,6 @@ export async function POST(req: NextRequest) {
 
     const supabase = getServerClient();
 
-    // Load the source media
     const { data: sourceMedia, error: mediaError } = await supabase
       .from("media")
       .select("*")
@@ -31,7 +42,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Nur Bilder können verfeinert werden" }, { status: 400 });
     }
 
-    // Load the brand
     const { data: brand } = await supabase
       .from("brands")
       .select("*")
@@ -42,50 +52,75 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Marke nicht gefunden" }, { status: 404 });
     }
 
-    // Download the source image
     const bucket = sourceMedia.source === "upload" ? "media-uploads" : "ai-generated";
-    const { data: blob, error: downloadError } = await supabase.storage
+    const { data: blob, error: dlError } = await supabase.storage
       .from(bucket)
       .download(sourceMedia.storage_path);
 
-    if (downloadError || !blob) {
+    if (dlError || !blob) {
       return NextResponse.json({ error: "Quell-Bild konnte nicht geladen werden" }, { status: 500 });
     }
 
     const arrayBuffer = await blob.arrayBuffer();
-    const referenceImageBase64 = Buffer.from(arrayBuffer).toString("base64");
-    const referenceImageMimeType = blob.type || "image/jpeg";
+    const refImage: ReferenceImage = {
+      base64: Buffer.from(arrayBuffer).toString("base64"),
+      mimeType: blob.type || "image/jpeg",
+      hint: "Original image to be refined",
+    };
 
-    // Build refinement prompt
     const refinementPrompt = sourceMedia.ai_prompt
       ? `Edit this image with the following changes: ${feedback}\n\nKeep the overall composition and lighting style.\nOriginal concept: ${sourceMedia.ai_prompt.slice(0, 300)}`
       : `Edit this image with the following changes: ${feedback}\n\nKeep the overall composition and lighting style.`;
 
-    // Generate refined image
+    console.log(`[refine-image] Refining ${mediaId}, logo=${!!includeLogo}`);
+
     const result = await generateImage(refinementPrompt, brand as Brand, {
       aspectRatio: aspectRatio || "1:1",
-      referenceImageBase64,
-      referenceImageMimeType,
+      referenceImages: [refImage],
     });
 
-    // Save refined image
-    const ext = result.mimeType.includes("png") ? "png" : "jpg";
+    let finalBuffer = Buffer.from(result.base64, "base64");
+    let finalMimeType = result.mimeType;
+    let logoApplied = false;
+
+    if (includeLogo && brand.logo_url) {
+      try {
+        const logoRes = await fetch(brand.logo_url);
+        if (logoRes.ok) {
+          const logoBuffer = Buffer.from(await logoRes.arrayBuffer());
+          const composed = await composeWithLogo(finalBuffer, logoBuffer, {
+            position: (logoPosition || "bottom-right") as LogoPosition,
+            size: (logoSize || "medium") as LogoSize,
+            opacity: typeof logoOpacity === "number" ? logoOpacity : 100,
+            padding: 32,
+          });
+          finalBuffer = composed.buffer;
+          finalMimeType = composed.format;
+          logoApplied = true;
+        }
+      } catch (logoError: any) {
+        console.error("[refine-image] Logo composition failed:", logoError.message);
+      }
+    }
+
+    const ext = finalMimeType.includes("png") ? "png" : "jpg";
     const filePath = `${brand.slug}/generated/${Date.now()}-refined.${ext}`;
-    const imageBuffer = Buffer.from(result.base64, "base64");
 
     const { error: uploadError } = await supabase.storage
       .from("ai-generated")
-      .upload(filePath, imageBuffer, {
-        contentType: result.mimeType,
+      .upload(filePath, finalBuffer, {
+        contentType: finalMimeType,
         upsert: false,
       });
 
     if (uploadError) throw uploadError;
 
-    // Insert as new media entry (linked to source)
     const refinedTitle = sourceMedia.title
       ? `${sourceMedia.title} (verfeinert)`
       : `Verfeinert: ${feedback.slice(0, 40)}`;
+
+    const tagArr = sourceMedia.tags ? [...sourceMedia.tags] : [];
+    if (logoApplied && !tagArr.includes("logo")) tagArr.push("logo");
 
     const { data: newMedia, error: insertError } = await supabase
       .from("media")
@@ -94,12 +129,12 @@ export async function POST(req: NextRequest) {
         type: "image",
         source: sourceMedia.source === "upload" ? "hybrid" : "ai_generated",
         storage_path: filePath,
-        file_size: imageBuffer.length,
+        file_size: finalBuffer.length,
         ai_prompt: result.fullPrompt,
-        ai_model: "gemini-3.1-flash-image-preview",
+        ai_model: "gemini-3.1-flash-image-preview" + (logoApplied ? " + logo-overlay" : ""),
         ai_refined_from: mediaId,
         title: refinedTitle,
-        tags: sourceMedia.tags,
+        tags: tagArr.length > 0 ? tagArr : null,
         category: sourceMedia.category,
         mood: sourceMedia.mood,
       })
@@ -108,8 +143,9 @@ export async function POST(req: NextRequest) {
 
     if (insertError) throw insertError;
 
-    return NextResponse.json({ success: true, media: newMedia });
+    return NextResponse.json({ success: true, media: newMedia, logoApplied });
   } catch (error: any) {
+    console.error("[refine-image] ERROR:", error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

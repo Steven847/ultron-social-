@@ -3,7 +3,16 @@ import { notFound } from "next/navigation";
 import { getServerClient } from "@/lib/supabase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Image as ImageIcon, Calendar, MessageSquare, Settings as SettingsIcon } from "lucide-react";
+import {
+  ArrowLeft,
+  Image as ImageIcon,
+  Calendar,
+  MessageSquare,
+  Settings as SettingsIcon,
+  FileText,
+  Sparkles,
+  Type,
+} from "lucide-react";
 import type { Brand } from "@/lib/types";
 import LogoUploader from "./logo-uploader";
 
@@ -13,14 +22,21 @@ async function getBrand(slug: string): Promise<Brand | null> {
   return data as Brand | null;
 }
 
-async function getMediaCount(brandId: string) {
+async function getCounts(brandId: string) {
   const supabase = getServerClient();
-  const { count } = await supabase
-    .from("media")
-    .select("*", { count: "exact", head: true })
-    .eq("brand_id", brandId)
-    .eq("archived", false);
-  return count || 0;
+  const [{ count: mediaCount }, { count: draftsCount }] = await Promise.all([
+    supabase
+      .from("media")
+      .select("*", { count: "exact", head: true })
+      .eq("brand_id", brandId)
+      .eq("archived", false),
+    supabase
+      .from("posts")
+      .select("*", { count: "exact", head: true })
+      .eq("brand_id", brandId)
+      .eq("status", "draft"),
+  ]);
+  return { mediaCount: mediaCount || 0, draftsCount: draftsCount || 0 };
 }
 
 export default async function BrandDetailPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -28,7 +44,7 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
   const brand = await getBrand(slug);
   if (!brand) notFound();
 
-  const mediaCount = await getMediaCount(brand.id);
+  const { mediaCount, draftsCount } = await getCounts(brand.id);
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -39,7 +55,6 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
         </Link>
       </Button>
 
-      {/* Brand header */}
       <Card className="mb-6">
         <CardHeader>
           <div className="flex items-start gap-4">
@@ -73,8 +88,7 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
         </CardHeader>
       </Card>
 
-      {/* Feature cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <Link href={`/brands/${brand.slug}/media`}>
           <Card className="hover:shadow-md hover:border-primary transition-all cursor-pointer h-full">
             <CardHeader>
@@ -85,7 +99,53 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
             <CardContent>
               <div className="text-xs">
                 <span className="font-bold text-primary">{mediaCount}</span>{" "}
-                <span className="text-muted-foreground">Medien in Bibliothek</span>
+                <span className="text-muted-foreground">in Bibliothek</span>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+
+        <Link href={`/brands/${brand.slug}/editor`}>
+          <Card className="hover:shadow-md hover:border-primary transition-all cursor-pointer h-full">
+            <CardHeader>
+              <Type className="w-8 h-8 mb-2 text-primary" />
+              <CardTitle className="text-lg">Text-Editor</CardTitle>
+              <CardDescription>Text-Overlays auf Bildern</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xs text-muted-foreground">
+                Live-Vorschau, Drag-and-Drop, mehrere Layer
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+
+        <Link href={`/brands/${brand.slug}/composer`}>
+          <Card className="hover:shadow-md hover:border-primary transition-all cursor-pointer h-full">
+            <CardHeader>
+              <Sparkles className="w-8 h-8 mb-2 text-primary" />
+              <CardTitle className="text-lg">Content Composer</CardTitle>
+              <CardDescription>Captions + Hashtags KI-generieren</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xs text-muted-foreground">
+                Mit Brand-Voice und Bild-Analyse
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+
+        <Link href={`/brands/${brand.slug}/drafts`}>
+          <Card className="hover:shadow-md hover:border-primary transition-all cursor-pointer h-full">
+            <CardHeader>
+              <FileText className="w-8 h-8 mb-2 text-primary" />
+              <CardTitle className="text-lg">Entwürfe</CardTitle>
+              <CardDescription>Gespeicherte Posts</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xs">
+                <span className="font-bold text-primary">{draftsCount}</span>{" "}
+                <span className="text-muted-foreground">Entwürfe</span>
               </div>
             </CardContent>
           </Card>
@@ -98,18 +158,7 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
             <CardDescription>Multi-Plattform Scheduling</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-xs text-muted-foreground">Kommt in v0.4</p>
-          </CardContent>
-        </Card>
-
-        <Card className="opacity-60">
-          <CardHeader>
-            <MessageSquare className="w-8 h-8 mb-2 text-primary" />
-            <CardTitle className="text-lg">Engagement</CardTitle>
-            <CardDescription>Hashtags + Kommentare</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">Kommt in v0.5</p>
+            <p className="text-xs text-muted-foreground">Kommt in v0.7</p>
           </CardContent>
         </Card>
 
