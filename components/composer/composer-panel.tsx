@@ -10,16 +10,15 @@ import {
   Sparkles,
   Wand2,
   Copy,
-  Heart,
-  Trash2,
   Save,
   Image as ImageIcon,
   X,
   Plus,
   RefreshCw,
-  Hash,
 } from "lucide-react";
-import type { CaptionTone, CaptionLength, Platform } from "@/lib/types";
+import type { CaptionLength, Platform, VoiceMode } from "@/lib/types";
+import VoiceModePicker from "./voice-mode-picker";
+import InspirationPicker from "./inspiration-picker";
 
 interface MediaItem {
   id: string;
@@ -37,19 +36,11 @@ interface CaptionVariant {
 
 interface Props {
   brandId: string;
+  brandSlug: string;
   brandName: string;
   initialMediaId?: string;
   onPostSaved?: () => void;
 }
-
-const TONES: { value: CaptionTone; label: string; emoji: string }[] = [
-  { value: "witzig", label: "Witzig", emoji: "😄" },
-  { value: "informativ", label: "Informativ", emoji: "📚" },
-  { value: "frech", label: "Frech", emoji: "😎" },
-  { value: "herzlich", label: "Herzlich", emoji: "💚" },
-  { value: "professionell", label: "Professionell", emoji: "💼" },
-  { value: "inspirierend", label: "Inspirierend", emoji: "✨" },
-];
 
 const LENGTHS: { value: CaptionLength; label: string; hint: string }[] = [
   { value: "kurz", label: "Kurz", hint: "80-150 Z." },
@@ -64,20 +55,25 @@ const PLATFORMS: { value: Platform; label: string }[] = [
   { value: "linkedin", label: "LinkedIn" },
 ];
 
-export default function ComposerPanel({ brandId, brandName, initialMediaId, onPostSaved }: Props) {
+export default function ComposerPanel({
+  brandId,
+  brandSlug,
+  brandName,
+  initialMediaId,
+  onPostSaved,
+}: Props) {
   const router = useRouter();
 
-  // Inputs
   const [selectedMediaId, setSelectedMediaId] = useState<string | null>(initialMediaId || null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [topic, setTopic] = useState("");
-  const [tone, setTone] = useState<CaptionTone>("witzig");
+  const [voiceMode, setVoiceMode] = useState<VoiceMode | null>(null);
+  const [inspirationIds, setInspirationIds] = useState<string[]>([]);
   const [length, setLength] = useState<CaptionLength>("mittel");
   const [platform, setPlatform] = useState<Platform>("instagram");
   const [variantCount, setVariantCount] = useState(3);
   const [includeFirstComment, setIncludeFirstComment] = useState(false);
 
-  // Outputs
   const [variants, setVariants] = useState<CaptionVariant[]>([]);
   const [variantGroup, setVariantGroup] = useState<string | null>(null);
   const [imageDescription, setImageDescription] = useState<string | null>(null);
@@ -85,15 +81,12 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
 
-  // Refinement per variant
   const [refiningIdx, setRefiningIdx] = useState<number | null>(null);
   const [refineFeedback, setRefineFeedback] = useState("");
 
-  // Media library for picker
   const [availableMedia, setAvailableMedia] = useState<MediaItem[]>([]);
   const [loadingMedia, setLoadingMedia] = useState(false);
 
-  // Save state
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   const loadMedia = useCallback(async () => {
@@ -112,7 +105,6 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
   }, [pickerOpen, availableMedia.length, loadMedia]);
 
   useEffect(() => {
-    // Pre-load when initial media id given
     if (initialMediaId && availableMedia.length === 0) loadMedia();
   }, [initialMediaId, availableMedia.length, loadMedia]);
 
@@ -127,11 +119,9 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
     setLoading(true);
     setError(null);
     setVariants([]);
-    setProgress("Analysiere Bild..." );
+    setProgress(selectedMediaId ? "Analysiere Bild..." : "Generiere Caption-Varianten...");
 
     try {
-      if (!selectedMediaId) setProgress("Generiere Caption-Varianten...");
-
       const res = await fetch("/api/composer/caption", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -139,11 +129,12 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
           brandId,
           mediaId: selectedMediaId || undefined,
           topic: topic || undefined,
-          tone,
+          voiceModeId: voiceMode?.id,
           length,
           platform,
           variantCount,
           includeFirstComment,
+          inspirationIds: inspirationIds.length > 0 ? inspirationIds : undefined,
         }),
       });
       const data = await res.json();
@@ -180,7 +171,6 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Verfeinerung fehlgeschlagen");
 
-      // Replace the variant with the refined version
       const next = [...variants];
       next[idx] = data.variant;
       setVariants(next);
@@ -203,7 +193,7 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
           brandId,
           type: "post",
           title: topic || "Neuer Entwurf",
-          tone,
+          tone: voiceMode?.slug || null,
           caption: variant.caption,
           hashtags: variant.hashtags,
           firstComment: variant.firstComment,
@@ -231,7 +221,6 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
 
   return (
     <div className="space-y-4">
-      {/* Picker overlay */}
       {pickerOpen && (
         <Card className="p-4">
           <div className="flex items-center justify-between mb-2">
@@ -278,17 +267,14 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
         </Card>
       )}
 
-      {/* Input Card */}
       <Card className="p-5 space-y-4">
         <div className="flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-primary" />
-          <h2 className="text-lg font-semibold">Caption-Generator</h2>
+          <h2 className="text-lg font-semibold">Content Composer</h2>
           <span className="text-xs text-muted-foreground ml-auto">für {brandName}</span>
         </div>
 
-        {/* Media + Topic */}
         <div className="grid md:grid-cols-2 gap-3">
-          {/* Media slot */}
           <div className="space-y-1">
             <Label className="text-xs">Bild/Video (optional)</Label>
             {selectedMedia ? (
@@ -304,9 +290,7 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium truncate">{selectedMedia.title || "Ohne Titel"}</div>
-                  <div className="text-[10px] text-muted-foreground">
-                    KI analysiert das Bild für die Caption
-                  </div>
+                  <div className="text-[10px] text-muted-foreground">KI analysiert das Bild</div>
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => setSelectedMediaId(null)}>
                   <X className="w-4 h-4" />
@@ -323,11 +307,8 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
             )}
           </div>
 
-          {/* Topic */}
           <div className="space-y-1">
-            <Label htmlFor="topic" className="text-xs">
-              Thema / Anlass (optional)
-            </Label>
+            <Label htmlFor="topic" className="text-xs">Thema / Anlass (optional)</Label>
             <Textarea
               id="topic"
               value={topic}
@@ -338,70 +319,68 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
           </div>
         </div>
 
-        {/* Tone, Length, Platform */}
-        <div className="grid gap-3">
+        {/* Platform first */}
+        <div className="space-y-1">
+          <Label className="text-xs">Plattform</Label>
+          <div className="flex flex-wrap gap-2">
+            {PLATFORMS.map((p) => (
+              <button
+                key={p.value}
+                onClick={() => setPlatform(p.value)}
+                className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                  platform === p.value
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border hover:bg-accent"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Voice mode picker */}
+        <div className="border-t pt-4">
+          <VoiceModePicker
+            platform={platform}
+            selectedId={voiceMode?.id || null}
+            onSelect={setVoiceMode}
+          />
+        </div>
+
+        {/* Inspiration picker */}
+        <div className="border-t pt-4">
+          <InspirationPicker
+            brandId={brandId}
+            brandSlug={brandSlug}
+            platform={platform}
+            selectedIds={inspirationIds}
+            onChange={setInspirationIds}
+          />
+        </div>
+
+        <div className="border-t pt-4 grid grid-cols-2 gap-3">
           <div className="space-y-1">
-            <Label className="text-xs">Tonalität</Label>
+            <Label className="text-xs">Länge</Label>
             <div className="flex flex-wrap gap-2">
-              {TONES.map((t) => (
+              {LENGTHS.map((l) => (
                 <button
-                  key={t.value}
-                  onClick={() => setTone(t.value)}
+                  key={l.value}
+                  onClick={() => setLength(l.value)}
                   className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
-                    tone === t.value
+                    length === l.value
                       ? "border-primary bg-primary text-primary-foreground"
                       : "border-border hover:bg-accent"
                   }`}
                 >
-                  <span className="mr-1">{t.emoji}</span>
-                  {t.label}
+                  <div className="font-medium">{l.label}</div>
+                  <div className="text-[9px] opacity-70">{l.hint}</div>
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Länge</Label>
-              <div className="flex flex-wrap gap-2">
-                {LENGTHS.map((l) => (
-                  <button
-                    key={l.value}
-                    onClick={() => setLength(l.value)}
-                    className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
-                      length === l.value
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border hover:bg-accent"
-                    }`}
-                  >
-                    <div className="font-medium">{l.label}</div>
-                    <div className="text-[9px] opacity-70">{l.hint}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <Label className="text-xs">Plattform</Label>
-              <div className="flex flex-wrap gap-2">
-                {PLATFORMS.map((p) => (
-                  <button
-                    key={p.value}
-                    onClick={() => setPlatform(p.value)}
-                    className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
-                      platform === p.value
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border hover:bg-accent"
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-2">
             <div className="space-y-1">
               <Label className="text-xs">Anzahl Varianten: {variantCount}</Label>
               <input
@@ -443,7 +422,6 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
         </div>
       </Card>
 
-      {/* Image description hint */}
       {imageDescription && (
         <Card className="p-3 bg-accent/30 text-xs">
           <div className="font-semibold mb-1 text-muted-foreground uppercase">KI sieht im Bild:</div>
@@ -451,11 +429,17 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
         </Card>
       )}
 
-      {/* Variants */}
       {variants.length > 0 && (
         <div className="space-y-3">
           <div className="text-sm font-semibold flex items-center justify-between">
-            <span>{variants.length} Varianten</span>
+            <span>
+              {variants.length} Varianten
+              {voiceMode && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                  · Stil: {voiceMode.emoji} {voiceMode.label}
+                </span>
+              )}
+            </span>
             {saveStatus && <span className="text-xs text-primary">{saveStatus}</span>}
           </div>
 
@@ -466,13 +450,32 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
                   Variante {idx + 1}
                 </div>
                 <div className="flex gap-1">
-                  <Button size="sm" variant="ghost" onClick={() => copyToClipboard(v.caption + "\n\n" + v.hashtags.join(" "))} title="Caption + Hashtags kopieren">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      copyToClipboard(v.caption + "\n\n" + v.hashtags.join(" "))
+                    }
+                    title="Caption + Hashtags kopieren"
+                  >
                     <Copy className="w-3.5 h-3.5" />
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setRefiningIdx(refiningIdx === idx ? null : idx)} title="Verfeinern">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setRefiningIdx(refiningIdx === idx ? null : idx)
+                    }
+                    title="Verfeinern"
+                  >
                     <Wand2 className="w-3.5 h-3.5" />
                   </Button>
-                  <Button size="sm" variant="default" onClick={() => handleSaveAsDraft(v)} title="Als Entwurf speichern">
+                  <Button
+                    size="sm"
+                    variant="default"
+                    onClick={() => handleSaveAsDraft(v)}
+                    title="Als Entwurf speichern"
+                  >
                     <Save className="w-3.5 h-3.5" />
                   </Button>
                 </div>
@@ -506,7 +509,7 @@ export default function ComposerPanel({ brandId, brandName, initialMediaId, onPo
                   <Textarea
                     value={refineFeedback}
                     onChange={(e) => setRefineFeedback(e.target.value)}
-                    placeholder="z.B. Etwas kürzer, mehr Witz am Anfang, Lidl-Bezug hinzufügen..."
+                    placeholder="z.B. Etwas kürzer, mehr Witz am Anfang..."
                     rows={2}
                     className="mt-1"
                   />

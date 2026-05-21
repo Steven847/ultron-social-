@@ -1,4 +1,5 @@
 // lib/types.ts - TypeScript types matching the Supabase schema
+// v0.5: Added VoiceMode and InspirationPost
 
 export type Platform = "instagram" | "facebook" | "tiktok" | "linkedin";
 export type MediaType = "image" | "video";
@@ -29,19 +30,6 @@ export interface Brand {
   active: boolean;
   created_at: string;
   updated_at: string;
-}
-
-export interface SocialAccount {
-  id: string;
-  brand_id: string;
-  platform: Platform;
-  account_handle: string;
-  account_id: string | null;
-  access_token: string | null;
-  refresh_token: string | null;
-  token_expires_at: string | null;
-  followers_count: number | null;
-  active: boolean;
 }
 
 export interface Media {
@@ -111,12 +99,37 @@ export interface CaptionHistoryEntry {
   created_at: string;
 }
 
-export interface WeekPlan {
+// NEW in v0.5: Voice modes — curated stylistic profiles
+export interface VoiceMode {
   id: string;
-  brand_id: string;
-  week_start_date: string;
-  theme: string | null;
+  slug: string;
+  label: string;
+  emoji: string | null;
+  description: string;
+  platforms: Platform[];
+  best_for: string | null;
+  style_instructions: string;
+  example_hook: string | null;
+  example_structure: string | null;
+  avoid: string | null;
+  category: string;
+  sort_order: number;
+  active: boolean;
+}
+
+// NEW in v0.5: Inspiration library — reference posts from real world
+export interface InspirationPost {
+  id: string;
+  brand_id: string | null;
+  title: string | null;
+  caption: string;
+  platform: Platform | null;
+  source_url: string | null;
+  source_account: string | null;
+  tags: string[] | null;
   notes: string | null;
-  status: "draft" | "active" | "completed" | "archived";
+  why_it_works: string | null;
+  used_count: number;
+  last_used_at: string | null;
   created_at: string;
 }

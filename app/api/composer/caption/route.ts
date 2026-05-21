@@ -1,5 +1,4 @@
-// app/api/composer/caption/route.ts — Generate caption variants for a brand,
-// optionally based on an image from the library
+// app/api/composer/caption/route.ts — Generate captions with voice modes + inspirations
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/supabase";
@@ -8,7 +7,7 @@ import {
   generateCaptions,
   type CaptionRequest,
 } from "@/lib/composer";
-import type { Brand } from "@/lib/types";
+import type { Brand, VoiceMode, InspirationPost } from "@/lib/types";
 import crypto from "crypto";
 
 export const maxDuration = 90;
@@ -20,12 +19,13 @@ export async function POST(req: NextRequest) {
       brandId,
       mediaId,
       topic,
-      tone = "witzig",
+      voiceModeId,
       length = "mittel",
       platform = "instagram",
       variantCount = 3,
       includeFirstComment = false,
       saveHistory = true,
+      inspirationIds,
     } = body;
 
     if (!brandId) {
@@ -49,6 +49,43 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Marke nicht gefunden" }, { status: 404 });
     }
 
+    // Load voice mode if specified
+    let voiceMode: VoiceMode | null = null;
+    if (voiceModeId) {
+      const { data } = await supabase
+        .from("voice_modes")
+        .select("*")
+        .eq("id", voiceModeId)
+        .single();
+      voiceMode = data as VoiceMode | null;
+    }
+
+    // Load inspirations if specified
+    let inspirations: InspirationPost[] = [];
+    if (Array.isArray(inspirationIds) && inspirationIds.length > 0) {
+      const { data } = await supabase
+        .from("inspiration_posts")
+        .select("*")
+        .in("id", inspirationIds);
+      inspirations = (data as InspirationPost[]) || [];
+
+      // Track usage
+      for (const insp of inspirations) {
+        const { data: current } = await supabase
+          .from("inspiration_posts")
+          .select("used_count")
+          .eq("id", insp.id)
+          .single();
+        await supabase
+          .from("inspiration_posts")
+          .update({
+            used_count: (current?.used_count || 0) + 1,
+            last_used_at: new Date().toISOString(),
+          })
+          .eq("id", insp.id);
+      }
+    }
+
     // Get image description if media provided
     let imageDescription: string | undefined;
     if (mediaId) {
@@ -59,12 +96,10 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (media) {
-        // Use cached description if it exists
         if (media.ai_description) {
           imageDescription = media.ai_description;
           console.log("[composer/caption] Using cached description");
         } else if (media.type === "image") {
-          // Generate description and cache it
           const bucket = media.source === "upload" ? "media-uploads" : "ai-generated";
           const { data: blob } = await supabase.storage
             .from(bucket)
@@ -85,7 +120,6 @@ export async function POST(req: NextRequest) {
               .eq("id", mediaId);
           }
         } else if (media.type === "video") {
-          // For videos, just use title + tags as context (no vision yet)
           const parts: string[] = [];
           if (media.title) parts.push("Titel: " + media.title);
           if (media.tags && media.tags.length > 0) parts.push("Tags: " + media.tags.join(", "));
@@ -99,14 +133,18 @@ export async function POST(req: NextRequest) {
       brand: brand as Brand,
       topic,
       imageDescription,
-      tone,
+      voiceMode,
       length,
       platform,
       variantCount,
       includeFirstComment,
+      inspirations: inspirations.length > 0 ? inspirations : undefined,
     };
 
-    console.log("[composer/caption] Generating", variantCount, "variants...");
+    console.log(
+      `[composer/caption] Generating ${variantCount} variants ` +
+      `(voice: ${voiceMode?.label || "default"}, inspirations: ${inspirations.length})`
+    );
     const variants = await generateCaptions(reqOptions);
 
     if (variants.length === 0) {
@@ -116,7 +154,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Save to caption_history (grouped by variant_group)
     const variantGroup = crypto.randomUUID();
     if (saveHistory) {
       const rows = variants.map((v) => ({
@@ -125,7 +162,7 @@ export async function POST(req: NextRequest) {
         hashtags: v.hashtags,
         first_comment: v.firstComment || null,
         topic: topic || null,
-        tone,
+        tone: voiceMode?.slug || null,
         length_category: length,
         variant_group: variantGroup,
         media_id: mediaId || null,
@@ -135,7 +172,6 @@ export async function POST(req: NextRequest) {
         .insert(rows)
         .select();
 
-      // Return variants with their IDs from history
       const variantsWithIds = variants.map((v, i) => ({
         ...v,
         id: saved?.[i]?.id || null,
@@ -146,6 +182,8 @@ export async function POST(req: NextRequest) {
         variants: variantsWithIds,
         variantGroup,
         imageDescription,
+        voiceMode: voiceMode ? { id: voiceMode.id, label: voiceMode.label } : null,
+        usedInspirations: inspirations.length,
       });
     }
 

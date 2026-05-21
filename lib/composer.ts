@@ -1,6 +1,8 @@
-// lib/composer.ts — Helpers for caption + hashtag composition
+// lib/composer.ts — Caption + hashtag composition with Voice Modes + Inspiration
+// v0.5: Voice modes replace simple "tone" — much richer stylistic guidance.
+//       Inspiration posts can be passed as style anchors.
 
-import type { Brand, CaptionTone, CaptionLength } from "./types";
+import type { Brand, CaptionLength, VoiceMode, InspirationPost } from "./types";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -11,8 +13,7 @@ function getApiKey() {
 }
 
 // --- IMAGE/VIDEO ANALYSIS (Vision) ---
-// Returns a German description of what's visible in the image.
-// Used to seed caption generation.
+
 export async function describeImage(imageBase64: string, mimeType: string): Promise<string> {
   const apiKey = getApiKey();
   const model = "gemini-2.5-flash";
@@ -46,17 +47,19 @@ export async function describeImage(imageBase64: string, mimeType: string): Prom
   return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
 }
 
-// --- CAPTION GENERATION ---
+// --- CAPTION GENERATION (with Voice Modes + Inspirations) ---
 
 export interface CaptionRequest {
   brand: Brand;
   topic?: string;
   imageDescription?: string;
-  tone: CaptionTone;
+  voiceMode?: VoiceMode | null;
   length: CaptionLength;
   platform?: "instagram" | "facebook" | "tiktok" | "linkedin";
   variantCount?: number;
   includeFirstComment?: boolean;
+  // NEW: inspiration posts as style anchors
+  inspirations?: InspirationPost[];
 }
 
 export interface CaptionVariant {
@@ -69,15 +72,6 @@ const LENGTH_HINTS: Record<CaptionLength, string> = {
   kurz: "Sehr kurz — maximal 2 Sätze, ein Hook plus Punchline. Idealerweise 80-150 Zeichen.",
   mittel: "Mittellang — 3-5 Sätze mit Story-Bogen. Hook, Substanz, Call-to-Action. 200-500 Zeichen.",
   lang: "Ausführlich — 6-10 Sätze mit storytelling, mehreren Absätzen, klare Struktur. 500-1500 Zeichen.",
-};
-
-const TONE_HINTS: Record<CaptionTone, string> = {
-  witzig: "Spielerisch, mit Wortwitz, Pointen oder unerwarteten Wendungen. Aber nicht albern.",
-  informativ: "Sachlich-spannend. Fakten, Hintergründe, lehrreich aber lesbar.",
-  frech: "Provokant, direkt, mit Augenzwinkern. Etwas Kante, aber nicht beleidigend.",
-  herzlich: "Warm, persönlich, nahbar. Schreibt wie zu einem guten Freund.",
-  professionell: "Geschäftsmäßig, präzise, vertrauenserweckend. Wenig Emojis, klare Aussagen.",
-  inspirierend: "Motivierend, mit Vision, ermutigend. Großes Bild zeichnen.",
 };
 
 function buildPlatformHint(platform?: string): string {
@@ -94,13 +88,55 @@ function buildPlatformHint(platform?: string): string {
   }
 }
 
+function buildVoiceModeSection(voiceMode: VoiceMode | null | undefined): string {
+  if (!voiceMode) return "";
+  const parts: string[] = [];
+  parts.push("");
+  parts.push(`STIL-MODUS: ${voiceMode.label.toUpperCase()} ${voiceMode.emoji || ""}`);
+  parts.push("Beschreibung: " + voiceMode.description);
+  parts.push("");
+  parts.push("STIL-ANWEISUNGEN (befolge diese genau):");
+  parts.push(voiceMode.style_instructions);
+  if (voiceMode.example_hook) {
+    parts.push("");
+    parts.push(`Beispiel-Hook (Stil-Referenz, NICHT kopieren): "${voiceMode.example_hook}"`);
+  }
+  if (voiceMode.example_structure) {
+    parts.push("Struktur: " + voiceMode.example_structure);
+  }
+  if (voiceMode.avoid) {
+    parts.push("");
+    parts.push("VERMEIDE: " + voiceMode.avoid);
+  }
+  return parts.join("\n");
+}
+
+function buildInspirationsSection(inspirations: InspirationPost[] | undefined): string {
+  if (!inspirations || inspirations.length === 0) return "";
+  const parts: string[] = [];
+  parts.push("");
+  parts.push(`STIL-INSPIRATIONEN (${inspirations.length} Posts die der Nutzer als Referenz wählt):`);
+  parts.push("Analysiere die ENERGY und den RHYTHMUS dieser Posts und schreibe in ähnlichem Stil — ABER mit eigenem Inhalt für das Brand-Thema.");
+  parts.push("Kopiere NICHT die Sätze. Übernimm: Tonalität, Satzlängen, Anrede, Hook-Stil, Punchline-Pattern.");
+  parts.push("");
+  inspirations.forEach((insp, i) => {
+    parts.push(`--- Inspiration ${i + 1}${insp.source_account ? ` (von ${insp.source_account})` : ""} ---`);
+    parts.push(insp.caption);
+    if (insp.why_it_works) {
+      parts.push(`(Warum dieser Post funktioniert: ${insp.why_it_works})`);
+    }
+    parts.push("");
+  });
+  return parts.join("\n");
+}
+
 export async function generateCaptions(req: CaptionRequest): Promise<CaptionVariant[]> {
   const apiKey = getApiKey();
   const model = "gemini-2.5-flash";
 
   const variantCount = req.variantCount ?? 3;
 
-  // Build system prompt
+  // System prompt — brand context
   const sysParts: string[] = [];
   sysParts.push(`Du erstellst Social-Media-Captions für die Marke "${req.brand.name}".`);
   if (req.brand.description) sysParts.push("Marke: " + req.brand.description);
@@ -116,12 +152,21 @@ export async function generateCaptions(req: CaptionRequest): Promise<CaptionVari
   }
   const systemPrompt = sysParts.join("\n");
 
-  // Build user prompt
+  // User prompt
   const userParts: string[] = [];
   userParts.push(buildPlatformHint(req.platform));
   userParts.push("");
-  userParts.push("TONALITÄT: " + req.tone + " — " + TONE_HINTS[req.tone]);
   userParts.push("LÄNGE: " + req.length + " — " + LENGTH_HINTS[req.length]);
+
+  // Voice mode (replaces simple "tone")
+  if (req.voiceMode) {
+    userParts.push(buildVoiceModeSection(req.voiceMode));
+  }
+
+  // Inspirations
+  if (req.inspirations && req.inspirations.length > 0) {
+    userParts.push(buildInspirationsSection(req.inspirations));
+  }
 
   if (req.imageDescription) {
     userParts.push("");
@@ -159,14 +204,14 @@ export async function generateCaptions(req: CaptionRequest): Promise<CaptionVari
 
   userParts.push("");
   userParts.push(
-    `Erstelle ${variantCount} unterschiedliche Caption-Varianten. Jede Variante soll einen anderen Ansatz wählen (z.B. anderer Hook, andere Perspektive).`
+    `Erstelle ${variantCount} unterschiedliche Caption-Varianten. ` +
+    `WICHTIG: Jede Variante MUSS einen DEUTLICH anderen Ansatz wählen — anderer Hook, andere Reihenfolge, anderer Blickwinkel. ` +
+    `Wenn ein Stil-Modus aktiv ist, bleibe innerhalb dieses Stils, variiere aber die Umsetzung.`
   );
   userParts.push("");
   userParts.push("Antworte AUSSCHLIESSLICH als JSON-Array, ohne Markdown, ohne Erklärung:");
   userParts.push(
-    `[{"caption":"...","hashtags":["#tag1","#tag2"]${
-      req.includeFirstComment ? ',"firstComment":"..."' : ""
-    }}, ...]`
+    `[{"caption":"...","hashtags":["#tag1","#tag2"]${req.includeFirstComment ? ',"firstComment":"..."' : ""}}, ...]`
   );
 
   const userPrompt = userParts.join("\n");
@@ -179,7 +224,8 @@ export async function generateCaptions(req: CaptionRequest): Promise<CaptionVari
       body: JSON.stringify({
         contents: [{ parts: [{ text: userPrompt }] }],
         systemInstruction: { parts: [{ text: systemPrompt }] },
-        generationConfig: { maxOutputTokens: 3000, temperature: 0.85 },
+        // Higher temperature for more variation between variants
+        generationConfig: { maxOutputTokens: 3500, temperature: 0.95 },
       }),
     }
   );
@@ -241,8 +287,6 @@ export async function refineCaption(
   return variants[0] || { caption: original, hashtags: existingHashtags };
 }
 
-// --- HASHTAG SUGGESTIONS (standalone) ---
-
 export async function suggestHashtags(
   brand: Brand,
   context: string,
@@ -300,12 +344,9 @@ export async function suggestHashtags(
   }
 }
 
-// --- PARSING ---
-
 function parseCaptionVariants(rawText: string): CaptionVariant[] {
   const cleaned = rawText.replace(/```json\s*|```/g, "").trim();
 
-  // Find JSON array boundaries
   let json = cleaned;
   const start = cleaned.indexOf("[");
   const end = cleaned.lastIndexOf("]");

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getServerClient } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, FileText } from "lucide-react";
+import { ArrowLeft, FileText, BookOpen } from "lucide-react";
 import type { Brand } from "@/lib/types";
 import ComposerPanel from "@/components/composer/composer-panel";
 
@@ -49,20 +49,29 @@ export default async function BrandComposerPage({
           <div>
             <h1 className="text-2xl font-bold">{brand.name} — Content Composer</h1>
             <p className="text-sm text-muted-foreground">
-              Captions, Hashtags und Post-Entwürfe in Brand-Voice
+              Mit Stil-Modi und Inspirations-Bibliothek
             </p>
           </div>
         </div>
-        <Button asChild variant="outline">
-          <Link href={`/brands/${brand.slug}/drafts`}>
-            <FileText className="w-4 h-4" />
-            Entwürfe ansehen
-          </Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brand.slug}/inspiration`}>
+              <BookOpen className="w-4 h-4" />
+              Inspirationen
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brand.slug}/drafts`}>
+              <FileText className="w-4 h-4" />
+              Entwürfe
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <ComposerPanel
         brandId={brand.id}
+        brandSlug={brand.slug}
         brandName={brand.name}
         initialMediaId={initialMediaId}
       />

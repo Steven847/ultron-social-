@@ -12,6 +12,7 @@ import {
   FileText,
   Sparkles,
   Type,
+  BookOpen,
 } from "lucide-react";
 import type { Brand } from "@/lib/types";
 import LogoUploader from "./logo-uploader";
@@ -24,7 +25,7 @@ async function getBrand(slug: string): Promise<Brand | null> {
 
 async function getCounts(brandId: string) {
   const supabase = getServerClient();
-  const [{ count: mediaCount }, { count: draftsCount }] = await Promise.all([
+  const [{ count: mediaCount }, { count: draftsCount }, { count: inspirationCount }] = await Promise.all([
     supabase
       .from("media")
       .select("*", { count: "exact", head: true })
@@ -35,8 +36,16 @@ async function getCounts(brandId: string) {
       .select("*", { count: "exact", head: true })
       .eq("brand_id", brandId)
       .eq("status", "draft"),
+    supabase
+      .from("inspiration_posts")
+      .select("*", { count: "exact", head: true })
+      .eq("brand_id", brandId),
   ]);
-  return { mediaCount: mediaCount || 0, draftsCount: draftsCount || 0 };
+  return {
+    mediaCount: mediaCount || 0,
+    draftsCount: draftsCount || 0,
+    inspirationCount: inspirationCount || 0,
+  };
 }
 
 export default async function BrandDetailPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -44,7 +53,7 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
   const brand = await getBrand(slug);
   if (!brand) notFound();
 
-  const { mediaCount, draftsCount } = await getCounts(brand.id);
+  const { mediaCount, draftsCount, inspirationCount } = await getCounts(brand.id);
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -113,9 +122,7 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
               <CardDescription>Text-Overlays auf Bildern</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="text-xs text-muted-foreground">
-                Live-Vorschau, Drag-and-Drop, mehrere Layer
-              </div>
+              <div className="text-xs text-muted-foreground">29 Fonts, 36 Farben, Templates</div>
             </CardContent>
           </Card>
         </Link>
@@ -125,11 +132,25 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
             <CardHeader>
               <Sparkles className="w-8 h-8 mb-2 text-primary" />
               <CardTitle className="text-lg">Content Composer</CardTitle>
-              <CardDescription>Captions + Hashtags KI-generieren</CardDescription>
+              <CardDescription>Captions mit Stil-Modi</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="text-xs text-muted-foreground">
-                Mit Brand-Voice und Bild-Analyse
+              <div className="text-xs text-muted-foreground">14 Stil-Modi pro Plattform</div>
+            </CardContent>
+          </Card>
+        </Link>
+
+        <Link href={`/brands/${brand.slug}/inspiration`}>
+          <Card className="hover:shadow-md hover:border-primary transition-all cursor-pointer h-full">
+            <CardHeader>
+              <BookOpen className="w-8 h-8 mb-2 text-primary" />
+              <CardTitle className="text-lg">Inspirationen</CardTitle>
+              <CardDescription>Referenz-Posts als Stil-Anker</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xs">
+                <span className="font-bold text-primary">{inspirationCount}</span>{" "}
+                <span className="text-muted-foreground">gesammelt</span>
               </div>
             </CardContent>
           </Card>
@@ -159,33 +180,6 @@ export default async function BrandDetailPage({ params }: { params: Promise<{ sl
           </CardHeader>
           <CardContent>
             <p className="text-xs text-muted-foreground">Kommt in v0.7</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <SettingsIcon className="w-8 h-8 mb-2 text-primary" />
-            <CardTitle className="text-lg">Brand-Voice</CardTitle>
-            <CardDescription>Tonalität + Hashtags</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2 text-xs">
-              {brand.primary_hashtags && brand.primary_hashtags.length > 0 && (
-                <div>
-                  <div className="font-semibold mb-1">Haupt-Hashtags:</div>
-                  <div className="flex flex-wrap gap-1">
-                    {brand.primary_hashtags.slice(0, 3).map((tag) => (
-                      <span
-                        key={tag}
-                        className="px-2 py-0.5 rounded-full bg-accent text-accent-foreground"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
           </CardContent>
         </Card>
       </div>
