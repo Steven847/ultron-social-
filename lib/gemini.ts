@@ -1,5 +1,5 @@
 // lib/gemini.ts — Google Gemini API Integration for ULTRON
-// v0.4.4: CRITICAL FIX — much cleaner prompts for video, especially image-to-video
+// v0.6a-buildfix4: Regex rewritten without s-flag (works with older ES targets)
 
 import type { Brand } from "./types";
 
@@ -11,7 +11,7 @@ function getApiKey() {
   return key;
 }
 
-// --- BRAND RULES FOR IMAGES (unchanged from v0.4.2) ---
+// --- BRAND RULES FOR IMAGES ---
 
 const NO_LOGO_RULES_IMAGE = [
   "",
@@ -22,17 +22,36 @@ const NO_LOGO_RULES_IMAGE = [
   "- The brand logo is added AFTER generation as a separate overlay",
 ].join("\n");
 
+/**
+ * Clean brand image rules by removing logo-related lines.
+ * Uses line-by-line approach instead of regex with `s` flag (which needs ES2018+).
+ */
+function cleanImageStyleRules(rules: string): string {
+  const lines = rules.split("\n");
+  const cleaned: string[] = [];
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    // Skip lines that mention logos/badges
+    if (
+      /^-\s*somewhere visible/i.test(line) ||
+      /^-\s*include.*logo/i.test(line) ||
+      /logo badge/i.test(line)
+    ) {
+      continue;
+    }
+    cleaned.push(line);
+  }
+  return cleaned.join("\n").trim();
+}
+
 export function buildImageBrandRules(brand: Brand | null): string {
   if (!brand) {
     return "\n\nSTYLE: Photorealistic, professional photography, natural lighting. NO children/minors." + NO_LOGO_RULES_IMAGE;
   }
   const parts = ["", "STYLE RULES:"];
   if (brand.image_style_rules) {
-    const cleanedRules = brand.image_style_rules
-      .replace(/[-]\s*Somewhere visible.*?(?=\n[-]|$)/gis, "")
-      .replace(/[-]\s*Include.*?logo.*?(?=\n[-]|$)/gis, "")
-      .replace(/.*?logo badge.*?(?=\n|$)/gi, "");
-    parts.push(cleanedRules.trim() || "Photorealistic, natural lighting, real textures.");
+    const cleanedRules = cleanImageStyleRules(brand.image_style_rules);
+    parts.push(cleanedRules || "Photorealistic, natural lighting, real textures.");
   } else {
     parts.push("Photorealistic, shot on Canon EOS R5, natural lighting, real textures.");
   }
@@ -44,25 +63,18 @@ export function buildImageBrandRules(brand: Brand | null): string {
   return parts.join("\n");
 }
 
-// --- BRAND RULES FOR VIDEOS (REWRITTEN — much shorter, mode-aware) ---
+// --- BRAND RULES FOR VIDEOS ---
 
-/**
- * Build video brand rules — MUCH shorter than before to avoid overwhelming Veo.
- * Different modes get different treatment:
- * - text-to-video: full brand context for atmosphere
- * - image-to-video: minimal rules — image already shows what to depict
- */
-export function buildVideoBrandRules(brand: Brand | null, mode: "text-to-video" | "image-to-video" = "text-to-video"): string {
-  // For image-to-video: keep it MINIMAL
-  // The image already defines the subject. Veo just needs to animate it.
+export function buildVideoBrandRules(
+  brand: Brand | null,
+  mode: "text-to-video" | "image-to-video" = "text-to-video"
+): string {
   if (mode === "image-to-video") {
     return "\n\nQuality: cinematic, professional, photorealistic. Do not add text, logos, or watermarks.";
   }
 
-  // For text-to-video: include brand atmosphere but stay focused
   const parts: string[] = [""];
   if (brand?.tone) {
-    // Extract just the mood, not the writing style (which is irrelevant for silent video)
     const moodSnippet = brand.tone.split(/[.!]/)[0].slice(0, 80);
     parts.push(`Mood: ${moodSnippet}.`);
   }
@@ -125,7 +137,7 @@ function getSuggestion(word: string): string {
   }
 }
 
-// --- IMAGE GENERATION (unchanged from v0.4.2) ---
+// --- IMAGE GENERATION ---
 
 export interface ReferenceImage {
   base64: string;
@@ -203,7 +215,7 @@ export async function generateImage(
   };
 }
 
-// --- VIDEO GENERATION (REWRITTEN — CLEAN PROMPTS) ---
+// --- VIDEO GENERATION ---
 
 export async function generateVideo(
   prompt: string,
@@ -222,18 +234,13 @@ export async function generateVideo(
   const isImageToVideo = !!(options?.startImageBase64 && options?.startImageMimeType);
   const mode = isImageToVideo ? "image-to-video" : "text-to-video";
 
-  // CRITICAL: Build clean, focused prompt
   let fullPrompt: string;
   if (isImageToVideo) {
-    // Image-to-video: prompt should ONLY describe motion and atmosphere
-    // The image defines WHAT is depicted. Don't repeat the subject.
     fullPrompt = prompt.trim() + buildVideoBrandRules(brand, mode);
   } else {
-    // Text-to-video: prompt describes full scene + minimal brand context
     fullPrompt = prompt.trim() + buildVideoBrandRules(brand, mode);
   }
 
-  // De-dup any accidental double newlines
   fullPrompt = fullPrompt.replace(/\n{3,}/g, "\n\n").trim();
 
   console.log("[gemini.generateVideo] Mode:", mode);
