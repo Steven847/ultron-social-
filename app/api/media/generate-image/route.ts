@@ -1,5 +1,5 @@
 // app/api/media/generate-image/route.ts — Image generation with job tracking
-// v0.4.4-fix: Load logo from Supabase Storage directly (no HTTP fetch)
+// v0.6a-buildfix3: TypeScript-strict-compatible Buffer handling
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/supabase";
@@ -11,20 +11,16 @@ import type { Brand } from "@/lib/types";
 export const maxDuration = 120;
 
 /**
- * Load the brand logo as a Buffer.
- * Tries multiple strategies:
- * 1. Parse logo_url to find bucket + path, then download via storage API (BEST — no network needed)
- * 2. Fall back to HTTP fetch with proper error handling
- * Returns null if logo can't be loaded.
+ * Load the brand logo as a Uint8Array buffer.
+ * Tries Supabase Storage API first (works without network), falls back to HTTP fetch.
  */
 async function loadBrandLogoBuffer(
   brand: Brand,
   supabase: ReturnType<typeof getServerClient>
-): Promise<Buffer | null> {
+): Promise<Uint8Array | null> {
   if (!brand.logo_url) return null;
 
   // Strategy 1: parse Supabase Storage URL and use storage API
-  // URL format: https://PROJECT.supabase.co/storage/v1/object/public/BUCKET/PATH
   const match = brand.logo_url.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+?)(?:\?.*)?$/);
   if (match) {
     const bucket = match[1];
@@ -35,7 +31,8 @@ async function loadBrandLogoBuffer(
       if (error || !blob) {
         console.warn(`[generate-image] Storage download failed: ${error?.message || "no blob"}`);
       } else {
-        const buffer = Buffer.from(await blob.arrayBuffer());
+        const arrayBuffer = await blob.arrayBuffer();
+        const buffer = new Uint8Array(arrayBuffer);
         console.log(`[generate-image] Logo loaded from storage: ${buffer.length} bytes`);
         return buffer;
       }
@@ -53,7 +50,8 @@ async function loadBrandLogoBuffer(
       console.warn(`[generate-image] HTTP fetch failed: ${res.status} ${res.statusText}`);
       return null;
     }
-    const buffer = Buffer.from(await res.arrayBuffer());
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = new Uint8Array(arrayBuffer);
     console.log(`[generate-image] Logo loaded via HTTP: ${buffer.length} bytes`);
     return buffer;
   } catch (e: any) {
@@ -99,7 +97,7 @@ export async function POST(req: NextRequest) {
     if (!brand) throw new Error("Marke nicht gefunden");
 
     // Load references
-    let referenceImages: ReferenceImage[] = [];
+    const referenceImages: ReferenceImage[] = [];
     let aiRefinedFrom: string | null = null;
     let sourceWasUpload = false;
 
@@ -130,16 +128,16 @@ export async function POST(req: NextRequest) {
       referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
     });
 
-    let imageBuffer = Buffer.from(result.base64, "base64");
+    // Use Uint8Array throughout for max compatibility with strict TypeScript
+    let imageBuffer: Uint8Array = new Uint8Array(Buffer.from(result.base64, "base64"));
 
-    // Logo overlay — now with proper error handling
+    // Logo overlay
     if (applyLogo && brand.logo_url) {
       await updateJobPhase(jobId, jobType, "logo-overlay");
       const logoBuffer = await loadBrandLogoBuffer(brand as Brand, supabase);
 
       if (!logoBuffer) {
         console.error("[generate-image] LOGO OVERLAY SKIPPED: Could not load logo file");
-        // Don't fail the whole job — just skip the overlay and warn in tags
       } else {
         try {
           imageBuffer = await applyLogoOverlay({
@@ -153,7 +151,6 @@ export async function POST(req: NextRequest) {
           console.log("[generate-image] Logo overlay applied successfully");
         } catch (e: any) {
           console.error("[generate-image] Logo composition failed:", e.message);
-          // Don't fail the job — return image without overlay
         }
       }
     }

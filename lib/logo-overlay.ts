@@ -1,94 +1,148 @@
-// lib/logo-overlay.ts — Apply brand logo overlay to generated images
-// Uses sharp for high-quality, pixel-perfect compositing
+// lib/logo-overlay.ts — Apply brand logo onto a base image using sharp
+// v0.6a-buildfix3: Use Uint8Array base type to avoid Buffer<ArrayBuffer> vs Buffer<ArrayBufferLike> conflicts
 
 import sharp from "sharp";
 
-export type OverlayPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+export type LogoPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
+// Use Uint8Array as input type — Buffer extends Uint8Array, so ANY buffer variant fits
+// Sharp also accepts Uint8Array natively
 export interface LogoOverlayOptions {
-  position?: OverlayPosition;
-  // Logo width as percentage of base image width (5-30)
-  sizePercent?: number;
-  // Padding from edge in pixels (will be scaled relative to base)
-  paddingPercent?: number;
-  // Opacity 0-100
-  opacity?: number;
+  baseImageBuffer: Uint8Array;
+  logoBuffer: Uint8Array;
+  position: LogoPosition;
+  sizePercent: number;
+  paddingPercent: number;
+  opacity: number;
 }
 
 /**
- * Apply a logo overlay onto a base image.
- * Both inputs are Buffer (raw image bytes).
- * Returns the composited image as Buffer (PNG).
+ * Composite a brand logo onto a base image. Returns a Uint8Array (which IS a Buffer).
  */
-export async function applyLogoOverlay(
-  baseImageBuffer: Buffer,
-  logoBuffer: Buffer,
-  options: LogoOverlayOptions = {}
-): Promise<Buffer> {
-  const position = options.position || "bottom-right";
-  const sizePercent = Math.max(5, Math.min(30, options.sizePercent ?? 12));
-  const paddingPercent = Math.max(1, Math.min(10, options.paddingPercent ?? 3));
-  const opacity = Math.max(20, Math.min(100, options.opacity ?? 100));
+export async function applyLogoOverlay(options: LogoOverlayOptions): Promise<Uint8Array> {
+  const { baseImageBuffer, logoBuffer, position, sizePercent, paddingPercent, opacity } = options;
 
-  // Get base image dimensions
-  const baseImage = sharp(baseImageBuffer);
-  const baseMeta = await baseImage.metadata();
+  // --- VALIDATION ---
+  if (!baseImageBuffer || baseImageBuffer.length === 0) {
+    throw new Error(
+      `applyLogoOverlay: baseImageBuffer is invalid (length=${baseImageBuffer?.length || 0})`
+    );
+  }
+  if (!logoBuffer || logoBuffer.length === 0) {
+    throw new Error(
+      `applyLogoOverlay: logoBuffer is invalid (length=${logoBuffer?.length || 0})`
+    );
+  }
+
+  console.log(
+    `[logo-overlay] Start: base=${baseImageBuffer.length}B, logo=${logoBuffer.length}B, ` +
+    `position=${position}, size=${sizePercent}%, padding=${paddingPercent}%, opacity=${opacity}%`
+  );
+
+  // --- READ BASE IMAGE METADATA ---
+  let baseMeta;
+  try {
+    baseMeta = await sharp(baseImageBuffer).metadata();
+  } catch (e: any) {
+    throw new Error(`applyLogoOverlay: Cannot read base image metadata: ${e.message}`);
+  }
+
   if (!baseMeta.width || !baseMeta.height) {
-    throw new Error("Base-Bild hat keine gültigen Dimensionen");
+    throw new Error(
+      `applyLogoOverlay: Base image has invalid dimensions ` +
+      `(width=${baseMeta.width}, height=${baseMeta.height})`
+    );
   }
 
-  // Compute target logo width and padding
-  const targetLogoWidth = Math.round((baseMeta.width * sizePercent) / 100);
-  const padding = Math.round((baseMeta.width * paddingPercent) / 100);
+  const baseWidth = baseMeta.width;
+  const baseHeight = baseMeta.height;
 
-  // Resize logo to target width (preserves aspect ratio)
-  let logo = sharp(logoBuffer).resize({ width: targetLogoWidth, withoutEnlargement: false });
+  // --- CALCULATE LOGO SIZE AND POSITION ---
+  const logoTargetWidth = Math.max(50, Math.round((sizePercent / 100) * baseWidth));
+  const paddingPx = Math.max(5, Math.round((paddingPercent / 100) * baseWidth));
 
-  // Apply opacity if less than 100
-  if (opacity < 100) {
-    logo = logo.composite([
-      {
-        input: Buffer.from([255, 255, 255, Math.round((opacity / 100) * 255)]),
-        raw: { width: 1, height: 1, channels: 4 },
-        tile: true,
-        blend: "dest-in",
-      },
-    ]);
+  // --- RESIZE LOGO + APPLY OPACITY ---
+  let processedLogo: Buffer;
+  try {
+    let logoPipeline = sharp(logoBuffer).resize({
+      width: logoTargetWidth,
+      fit: "inside",
+      withoutEnlargement: false,
+    });
+
+    if (opacity < 100) {
+      const alphaMultiplier = opacity / 100;
+      logoPipeline = logoPipeline.ensureAlpha().composite([
+        {
+          input: Buffer.from([255, 255, 255, Math.round(255 * alphaMultiplier)]),
+          raw: { width: 1, height: 1, channels: 4 },
+          tile: true,
+          blend: "dest-in",
+        },
+      ]);
+    }
+
+    processedLogo = await logoPipeline.png().toBuffer();
+  } catch (e: any) {
+    throw new Error(`applyLogoOverlay: Logo resize/opacity failed: ${e.message}`);
   }
 
-  const logoBuffer2 = await logo.png().toBuffer();
-  const logoMeta = await sharp(logoBuffer2).metadata();
+  const logoMeta = await sharp(processedLogo).metadata();
+  const logoWidth = logoMeta.width || logoTargetWidth;
+  const logoHeight = logoMeta.height || logoTargetWidth;
 
-  if (!logoMeta.width || !logoMeta.height) {
-    throw new Error("Logo hat keine gültigen Dimensionen");
+  // --- CALCULATE POSITION ---
+  let top = 0;
+  let left = 0;
+  switch (position) {
+    case "top-left":
+      top = paddingPx;
+      left = paddingPx;
+      break;
+    case "top-right":
+      top = paddingPx;
+      left = baseWidth - logoWidth - paddingPx;
+      break;
+    case "bottom-left":
+      top = baseHeight - logoHeight - paddingPx;
+      left = paddingPx;
+      break;
+    case "bottom-right":
+      top = baseHeight - logoHeight - paddingPx;
+      left = baseWidth - logoWidth - paddingPx;
+      break;
   }
 
-  // Compute position offsets
-  let left = padding;
-  let top = padding;
+  top = Math.max(0, Math.min(top, baseHeight - logoHeight));
+  left = Math.max(0, Math.min(left, baseWidth - logoWidth));
 
-  if (position === "top-right" || position === "bottom-right") {
-    left = baseMeta.width - logoMeta.width - padding;
+  console.log(
+    `[logo-overlay] Compositing: base=${baseWidth}x${baseHeight}, ` +
+    `logo=${logoWidth}x${logoHeight}, position=(${left},${top})`
+  );
+
+  // --- COMPOSITE ---
+  let result: Buffer;
+  try {
+    result = await sharp(baseImageBuffer)
+      .composite([
+        {
+          input: processedLogo,
+          top,
+          left,
+        },
+      ])
+      .png()
+      .toBuffer();
+  } catch (e: any) {
+    throw new Error(`applyLogoOverlay: Final composite failed: ${e.message}`);
   }
-  if (position === "bottom-left" || position === "bottom-right") {
-    top = baseMeta.height - logoMeta.height - padding;
-  }
 
-  // Ensure within bounds
-  left = Math.max(0, Math.min(left, baseMeta.width - logoMeta.width));
-  top = Math.max(0, Math.min(top, baseMeta.height - logoMeta.height));
-
-  // Composite
-  const result = await sharp(baseImageBuffer)
-    .composite([
-      {
-        input: logoBuffer2,
-        top,
-        left,
-      },
-    ])
-    .png()
-    .toBuffer();
-
+  console.log(`[logo-overlay] Done: result=${result.length}B`);
   return result;
 }
+
+/**
+ * @deprecated Use `applyLogoOverlay` instead. This alias exists for backward compatibility.
+ */
+export const composeWithLogo = applyLogoOverlay;

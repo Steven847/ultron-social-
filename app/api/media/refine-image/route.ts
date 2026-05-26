@@ -1,149 +1,151 @@
-// app/api/media/refine-image/route.ts — Refine an existing image with feedback
-// v0.2.2: supports optional logo overlay on the refined result
+// app/api/media/refine-image/route.ts — Refine existing image using AI
+// v0.6a-buildfix3: Uint8Array buffers for TypeScript-strict compatibility
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/supabase";
-import { generateImage, type ReferenceImage } from "@/lib/gemini";
-import { composeWithLogo, type LogoPosition, type LogoSize } from "@/lib/logo-overlay";
+import { generateImage } from "@/lib/gemini";
+import { applyLogoOverlay, type LogoPosition } from "@/lib/logo-overlay";
 import type { Brand } from "@/lib/types";
 
-export const maxDuration = 180;
+export const maxDuration = 60;
+
+async function loadBrandLogoBuffer(
+  brand: Brand,
+  supabase: ReturnType<typeof getServerClient>
+): Promise<Uint8Array | null> {
+  if (!brand.logo_url) return null;
+
+  const match = brand.logo_url.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+?)(?:\?.*)?$/);
+  if (match) {
+    const bucket = match[1];
+    const path = match[2];
+    try {
+      const { data: blob, error } = await supabase.storage.from(bucket).download(path);
+      if (!error && blob) {
+        const arrayBuffer = await blob.arrayBuffer();
+        return new Uint8Array(arrayBuffer);
+      }
+    } catch {}
+  }
+
+  try {
+    const res = await fetch(brand.logo_url);
+    if (res.ok) {
+      const arrayBuffer = await res.arrayBuffer();
+      return new Uint8Array(arrayBuffer);
+    }
+  } catch {}
+
+  return null;
+}
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const {
+      brandId,
       mediaId,
-      feedback,
+      prompt,
+      title,
+      tags,
       aspectRatio,
-      includeLogo,
+      applyLogo,
       logoPosition,
-      logoSize,
+      logoSizePercent,
+      logoPaddingPercent,
       logoOpacity,
     } = body;
 
-    if (!mediaId || !feedback?.trim()) {
-      return NextResponse.json({ error: "mediaId und feedback erforderlich" }, { status: 400 });
+    if (!brandId || !mediaId || !prompt) {
+      return NextResponse.json(
+        { error: "brandId, mediaId und prompt erforderlich" },
+        { status: 400 }
+      );
     }
 
     const supabase = getServerClient();
 
-    const { data: sourceMedia, error: mediaError } = await supabase
+    const { data: brand } = await supabase.from("brands").select("*").eq("id", brandId).single();
+    if (!brand) return NextResponse.json({ error: "Marke nicht gefunden" }, { status: 404 });
+
+    const { data: original } = await supabase
       .from("media")
       .select("*")
       .eq("id", mediaId)
       .single();
-
-    if (mediaError || !sourceMedia) {
-      return NextResponse.json({ error: "Quell-Medium nicht gefunden" }, { status: 404 });
+    if (!original || original.type !== "image") {
+      return NextResponse.json({ error: "Original-Bild nicht gefunden" }, { status: 404 });
     }
 
-    if (sourceMedia.type !== "image") {
-      return NextResponse.json({ error: "Nur Bilder können verfeinert werden" }, { status: 400 });
-    }
-
-    const { data: brand } = await supabase
-      .from("brands")
-      .select("*")
-      .eq("id", sourceMedia.brand_id)
-      .single();
-
-    if (!brand) {
-      return NextResponse.json({ error: "Marke nicht gefunden" }, { status: 404 });
-    }
-
-    const bucket = sourceMedia.source === "upload" ? "media-uploads" : "ai-generated";
+    const bucket = original.source === "upload" ? "media-uploads" : "ai-generated";
     const { data: blob, error: dlError } = await supabase.storage
       .from(bucket)
-      .download(sourceMedia.storage_path);
+      .download(original.storage_path);
 
     if (dlError || !blob) {
-      return NextResponse.json({ error: "Quell-Bild konnte nicht geladen werden" }, { status: 500 });
+      throw new Error("Original-Bild konnte nicht geladen werden");
     }
 
     const arrayBuffer = await blob.arrayBuffer();
-    const refImage: ReferenceImage = {
-      base64: Buffer.from(arrayBuffer).toString("base64"),
-      mimeType: blob.type || "image/jpeg",
-      hint: "Original image to be refined",
-    };
+    const refBase64 = Buffer.from(arrayBuffer).toString("base64");
+    const refMimeType = blob.type || "image/jpeg";
 
-    const refinementPrompt = sourceMedia.ai_prompt
-      ? `Edit this image with the following changes: ${feedback}\n\nKeep the overall composition and lighting style.\nOriginal concept: ${sourceMedia.ai_prompt.slice(0, 300)}`
-      : `Edit this image with the following changes: ${feedback}\n\nKeep the overall composition and lighting style.`;
-
-    console.log(`[refine-image] Refining ${mediaId}, logo=${!!includeLogo}`);
-
-    const result = await generateImage(refinementPrompt, brand as Brand, {
+    const result = await generateImage(prompt, brand as Brand, {
       aspectRatio: aspectRatio || "1:1",
-      referenceImages: [refImage],
+      referenceImages: [{ base64: refBase64, mimeType: refMimeType }],
     });
 
-    let finalBuffer = Buffer.from(result.base64, "base64");
-    let finalMimeType = result.mimeType;
-    let logoApplied = false;
+    // Use Uint8Array throughout for TypeScript-strict compatibility
+    let imageBuffer: Uint8Array = new Uint8Array(Buffer.from(result.base64, "base64"));
 
-    if (includeLogo && brand.logo_url) {
-      try {
-        const logoRes = await fetch(brand.logo_url);
-        if (logoRes.ok) {
-          const logoBuffer = Buffer.from(await logoRes.arrayBuffer());
-          const composed = await composeWithLogo(finalBuffer, logoBuffer, {
+    if (applyLogo && brand.logo_url) {
+      const logoBuffer = await loadBrandLogoBuffer(brand as Brand, supabase);
+      if (logoBuffer) {
+        try {
+          imageBuffer = await applyLogoOverlay({
+            baseImageBuffer: imageBuffer,
+            logoBuffer,
             position: (logoPosition || "bottom-right") as LogoPosition,
-            size: (logoSize || "medium") as LogoSize,
-            opacity: typeof logoOpacity === "number" ? logoOpacity : 100,
-            padding: 32,
+            sizePercent: logoSizePercent ?? 12,
+            paddingPercent: logoPaddingPercent ?? 3,
+            opacity: logoOpacity ?? 100,
           });
-          finalBuffer = composed.buffer;
-          finalMimeType = composed.format;
-          logoApplied = true;
+        } catch (e: any) {
+          console.warn("[refine-image] Logo overlay failed:", e.message);
         }
-      } catch (logoError: any) {
-        console.error("[refine-image] Logo composition failed:", logoError.message);
       }
     }
 
-    const ext = finalMimeType.includes("png") ? "png" : "jpg";
-    const filePath = `${brand.slug}/generated/${Date.now()}-refined.${ext}`;
-
+    const filePath = `${brand.slug}/generated/${Date.now()}-refined.png`;
     const { error: uploadError } = await supabase.storage
       .from("ai-generated")
-      .upload(filePath, finalBuffer, {
-        contentType: finalMimeType,
-        upsert: false,
-      });
-
+      .upload(filePath, imageBuffer, { contentType: "image/png", upsert: false });
     if (uploadError) throw uploadError;
 
-    const refinedTitle = sourceMedia.title
-      ? `${sourceMedia.title} (verfeinert)`
-      : `Verfeinert: ${feedback.slice(0, 40)}`;
+    const tagArr = (tags || "").split(",").map((t: string) => t.trim()).filter(Boolean);
+    tagArr.push("refined");
+    if (applyLogo) tagArr.push("logo-overlay");
 
-    const tagArr = sourceMedia.tags ? [...sourceMedia.tags] : [];
-    if (logoApplied && !tagArr.includes("logo")) tagArr.push("logo");
-
-    const { data: newMedia, error: insertError } = await supabase
+    const { data: mediaRow, error: insertError } = await supabase
       .from("media")
       .insert({
-        brand_id: brand.id,
+        brand_id: brandId,
         type: "image",
-        source: sourceMedia.source === "upload" ? "hybrid" : "ai_generated",
+        source: "ai_generated",
         storage_path: filePath,
-        file_size: finalBuffer.length,
+        file_size: imageBuffer.length,
         ai_prompt: result.fullPrompt,
-        ai_model: "gemini-3.1-flash-image-preview" + (logoApplied ? " + logo-overlay" : ""),
+        ai_model: "gemini-3.1-flash-image-preview",
         ai_refined_from: mediaId,
-        title: refinedTitle,
+        title: title || `Verfeinert: ${original.title || prompt.slice(0, 50)}`,
         tags: tagArr.length > 0 ? tagArr : null,
-        category: sourceMedia.category,
-        mood: sourceMedia.mood,
       })
       .select()
       .single();
 
     if (insertError) throw insertError;
 
-    return NextResponse.json({ success: true, media: newMedia, logoApplied });
+    return NextResponse.json({ success: true, media: mediaRow });
   } catch (error: any) {
     console.error("[refine-image] ERROR:", error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
