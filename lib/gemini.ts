@@ -1,9 +1,18 @@
 // lib/gemini.ts — Google Gemini API Integration for ULTRON
-// v0.6a-buildfix4: Regex rewritten without s-flag (works with older ES targets)
+// v0.7: Veo 3.1 upgrade — cinematic with native audio, 4K, longer videos
 
 import type { Brand } from "./types";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+
+// Veo 3.1 models — January 2026 release
+export const VEO_MODELS = {
+  cinematic: "veo-3.1-generate-preview",     // 4K, native audio, premium
+  fast: "veo-3.1-fast-generate-preview",     // faster, slightly less quality
+  lite: "veo-3.1-lite-generate-preview",     // cheapest, high-volume
+} as const;
+
+export type VeoModel = keyof typeof VEO_MODELS;
 
 function getApiKey() {
   const key = process.env.GEMINI_API_KEY;
@@ -22,16 +31,10 @@ const NO_LOGO_RULES_IMAGE = [
   "- The brand logo is added AFTER generation as a separate overlay",
 ].join("\n");
 
-/**
- * Clean brand image rules by removing logo-related lines.
- * Uses line-by-line approach instead of regex with `s` flag (which needs ES2018+).
- */
 function cleanImageStyleRules(rules: string): string {
   const lines = rules.split("\n");
   const cleaned: string[] = [];
   for (const line of lines) {
-    const lower = line.toLowerCase();
-    // Skip lines that mention logos/badges
     if (
       /^-\s*somewhere visible/i.test(line) ||
       /^-\s*include.*logo/i.test(line) ||
@@ -63,14 +66,15 @@ export function buildImageBrandRules(brand: Brand | null): string {
   return parts.join("\n");
 }
 
-// --- BRAND RULES FOR VIDEOS ---
+// --- BRAND RULES FOR VIDEOS (Veo 3.1 — supports audio) ---
 
 export function buildVideoBrandRules(
   brand: Brand | null,
   mode: "text-to-video" | "image-to-video" = "text-to-video"
 ): string {
   if (mode === "image-to-video") {
-    return "\n\nQuality: cinematic, professional, photorealistic. Do not add text, logos, or watermarks.";
+    // Image-to-video: minimal context, the image defines the subject
+    return "\n\nQuality: cinematic 4K, professional cinematography, photorealistic. Do not add text, logos, or watermarks.";
   }
 
   const parts: string[] = [""];
@@ -78,7 +82,7 @@ export function buildVideoBrandRules(
     const moodSnippet = brand.tone.split(/[.!]/)[0].slice(0, 80);
     parts.push(`Mood: ${moodSnippet}.`);
   }
-  parts.push("Quality: cinematic, professional, photorealistic.");
+  parts.push("Quality: cinematic 4K, professional cinematography, photorealistic.");
   parts.push("Do not add text, logos, watermarks, or brand names in the video.");
   return parts.join(" ");
 }
@@ -120,7 +124,7 @@ function getSuggestion(word: string): string {
     case "pot":
     case "kush":
     case "hemp":
-      return "ersetze durch 'the object', 'the subject', 'it' (besonders bei Image-to-Video, das Bild zeigt schon was)";
+      return "ersetze durch 'the object', 'the subject', 'it'";
     case "joint":
     case "blunt":
     case "smoke":
@@ -215,36 +219,32 @@ export async function generateImage(
   };
 }
 
-// --- VIDEO GENERATION ---
+// --- VIDEO GENERATION (Veo 3.1) ---
 
 export async function generateVideo(
   prompt: string,
   brand: Brand | null,
   options?: {
-    model?: string;
+    model?: VeoModel;
     aspectRatio?: "16:9" | "9:16";
     durationSeconds?: 4 | 6 | 8;
     startImageBase64?: string;
     startImageMimeType?: string;
+    generateAudio?: boolean; // NEW in Veo 3.1
+    resolution?: "720p" | "1080p" | "4k"; // NEW in Veo 3.1
   }
-): Promise<{ url: string; mimeType: string; fullPrompt: string }> {
+): Promise<{ url: string; mimeType: string; fullPrompt: string; model: string }> {
   const apiKey = getApiKey();
-  const model = options?.model || "veo-2.0-generate-001";
+  const selectedModel = options?.model || "cinematic";
+  const modelId = VEO_MODELS[selectedModel];
 
   const isImageToVideo = !!(options?.startImageBase64 && options?.startImageMimeType);
   const mode = isImageToVideo ? "image-to-video" : "text-to-video";
 
-  let fullPrompt: string;
-  if (isImageToVideo) {
-    fullPrompt = prompt.trim() + buildVideoBrandRules(brand, mode);
-  } else {
-    fullPrompt = prompt.trim() + buildVideoBrandRules(brand, mode);
-  }
-
+  let fullPrompt = prompt.trim() + buildVideoBrandRules(brand, mode);
   fullPrompt = fullPrompt.replace(/\n{3,}/g, "\n\n").trim();
 
-  console.log("[gemini.generateVideo] Mode:", mode);
-  console.log("[gemini.generateVideo] Final prompt length:", fullPrompt.length);
+  console.log("[gemini.generateVideo] Model:", modelId, "Mode:", mode);
   console.log("[gemini.generateVideo] Prompt:", fullPrompt.slice(0, 500));
 
   const instance: any = { prompt: fullPrompt };
@@ -255,34 +255,48 @@ export async function generateVideo(
     };
   }
 
+  // Veo 3.1 parameters
+  const parameters: any = {
+    aspectRatio: options?.aspectRatio || "9:16",
+    sampleCount: 1,
+    durationSeconds: options?.durationSeconds || 8,
+  };
+
+  // Veo 3.1 supports native audio generation
+  if (options?.generateAudio !== false) {
+    parameters.generateAudio = true;
+  }
+
+  // Resolution control (Veo 3.1)
+  if (options?.resolution) {
+    parameters.resolution = options.resolution;
+  }
+
   const res = await fetch(
-    GEMINI_API_BASE + "/models/" + model + ":predictLongRunning",
+    GEMINI_API_BASE + "/models/" + modelId + ":predictLongRunning",
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
         instances: [instance],
-        parameters: {
-          aspectRatio: options?.aspectRatio || "9:16",
-          sampleCount: 1,
-          durationSeconds: options?.durationSeconds || 8,
-        },
+        parameters,
       }),
     }
   );
 
   const data = await res.json();
-  if (data.error) throw new Error("Veo error: " + data.error.message);
+  if (data.error) throw new Error("Veo 3.1 error: " + data.error.message);
   if (!data.name) throw new Error("Unexpected Veo response: " + JSON.stringify(data).slice(0, 300));
 
-  const result = await pollVideoOperation(data.name, apiKey);
-  return { ...result, fullPrompt };
+  // Veo 3.1 may take longer for 4K/audio — extend timeout
+  const result = await pollVideoOperation(data.name, apiKey, 360);
+  return { ...result, fullPrompt, model: modelId };
 }
 
 async function pollVideoOperation(
   operationName: string,
   apiKey: string,
-  maxWaitSec = 240
+  maxWaitSec = 360
 ): Promise<{ url: string; mimeType: string }> {
   const startTime = Date.now();
   while (Date.now() - startTime < maxWaitSec * 1000) {

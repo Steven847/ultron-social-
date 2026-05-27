@@ -1,10 +1,9 @@
-// app/api/media/generate-video/route.ts — Video generation with job tracking
-// Returns jobId immediately so client can poll progress
-// Processes in background using waitUntil() pattern (or just async)
+// app/api/media/generate-video/route.ts — Video generation with Veo 3.1
+// v0.7: Veo 3.1 support with model selection and audio
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/supabase";
-import { generateVideo } from "@/lib/gemini";
+import { generateVideo, type VeoModel } from "@/lib/gemini";
 import { createJob, updateJobPhase, completeJob, failJob, type JobType } from "@/lib/job-tracker";
 import type { Brand } from "@/lib/types";
 
@@ -26,6 +25,9 @@ export async function POST(req: NextRequest) {
       title,
       tags,
       startImageMediaId,
+      model = "cinematic",
+      generateAudio = true,
+      resolution,
     } = body;
 
     if (!brandId || !prompt) {
@@ -33,13 +35,13 @@ export async function POST(req: NextRequest) {
     }
 
     jobType = startImageMediaId ? "video-i2v" : "video";
+    jobId = await createJob(brandId, jobType, { 
+      prompt: prompt.slice(0, 200),
+      model,
+      generateAudio,
+      resolution,
+    });
 
-    // Create job FIRST so client can poll immediately
-    jobId = await createJob(brandId, jobType, { prompt: prompt.slice(0, 200) });
-
-    // Start processing — but return jobId quickly so client can start polling
-    // Note: in Vercel-style serverless, we run the work in this same request
-    // (no separate background worker). Client polls /api/jobs/[id] for updates.
     const result = await processVideoGeneration({
       jobId,
       jobType,
@@ -50,6 +52,9 @@ export async function POST(req: NextRequest) {
       title,
       tags,
       startImageMediaId,
+      model: model as VeoModel,
+      generateAudio,
+      resolution,
     });
 
     return NextResponse.json({
@@ -57,6 +62,7 @@ export async function POST(req: NextRequest) {
       jobId,
       media: result.media,
       imageToVideo: !!startImageMediaId,
+      modelUsed: result.modelUsed,
     });
   } catch (error: any) {
     console.error("[generate-video] ERROR:", error.message);
@@ -78,8 +84,14 @@ async function processVideoGeneration(params: {
   title?: string;
   tags?: string;
   startImageMediaId?: string;
+  model: VeoModel;
+  generateAudio: boolean;
+  resolution?: "720p" | "1080p" | "4k";
 }) {
-  const { jobId, jobType, brandId, prompt, aspectRatio, duration, title, tags, startImageMediaId } = params;
+  const {
+    jobId, jobType, brandId, prompt, aspectRatio, duration, title, tags,
+    startImageMediaId, model, generateAudio, resolution,
+  } = params;
   const supabase = getServerClient();
 
   const { data: brand } = await supabase.from("brands").select("*").eq("id", brandId).single();
@@ -126,24 +138,24 @@ async function processVideoGeneration(params: {
     console.log(`[generate-video] Image-to-video with ${sizeMB.toFixed(2)} MB`);
   }
 
-  // Submit to Veo
   await updateJobPhase(jobId, jobType, "submitting");
-  console.log("[generate-video] Submitting to Veo...");
+  console.log(`[generate-video] Submitting to Veo 3.1 (${model})...`);
 
-  // Track rendering phase — Veo's poll happens inside generateVideo()
   await updateJobPhase(jobId, jobType, "rendering");
 
   const videoAspect = (aspectRatio || "9:16") as "9:16" | "16:9";
   const result = await generateVideo(prompt, brand as Brand, {
+    model,
     aspectRatio: videoAspect,
     durationSeconds: (duration || 8) as 4 | 6 | 8,
     startImageBase64,
     startImageMimeType,
+    generateAudio,
+    resolution,
   });
 
   if (!result.url) throw new Error("Veo lieferte keine Video-URL");
 
-  // Download
   await updateJobPhase(jobId, jobType, "downloading");
   const apiKey = process.env.GEMINI_API_KEY!;
   const separator = result.url.includes("?") ? "&" : "?";
@@ -151,9 +163,8 @@ async function processVideoGeneration(params: {
 
   const videoRes = await fetch(downloadUrl);
   if (!videoRes.ok) throw new Error("Video-Download fehlgeschlagen: " + videoRes.status);
-  const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+  const videoBuffer = new Uint8Array(await videoRes.arrayBuffer());
 
-  // Upload to storage
   await updateJobPhase(jobId, jobType, "uploading");
   const filePath = `${brand.slug}/generated/${Date.now()}-video.mp4`;
   const { error: uploadError } = await supabase.storage
@@ -165,13 +176,14 @@ async function processVideoGeneration(params: {
 
   if (uploadError) throw uploadError;
 
-  // Insert media row
   await updateJobPhase(jobId, jobType, "saving");
   const tagArr = (tags || "")
     .split(",")
     .map((t: string) => t.trim())
     .filter(Boolean);
   if (startImageMediaId) tagArr.push("image-to-video");
+  tagArr.push(`veo-3.1-${model}`);
+  if (generateAudio) tagArr.push("with-audio");
 
   const { data: mediaRow, error: insertError } = await supabase
     .from("media")
@@ -183,7 +195,7 @@ async function processVideoGeneration(params: {
       file_size: videoBuffer.length,
       duration_seconds: duration || 8,
       ai_prompt: result.fullPrompt,
-      ai_model: "veo-2.0-generate-001",
+      ai_model: result.model,
       ai_refined_from: aiRefinedFrom,
       title: title || `KI-Video: ${prompt.slice(0, 50)}`,
       tags: tagArr.length > 0 ? tagArr : null,
@@ -194,5 +206,5 @@ async function processVideoGeneration(params: {
   if (insertError) throw insertError;
 
   await completeJob(jobId, mediaRow.id);
-  return { media: mediaRow };
+  return { media: mediaRow, modelUsed: result.model };
 }
