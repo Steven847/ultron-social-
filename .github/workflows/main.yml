@@ -1,0 +1,45 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Hostinger VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🚀 Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            set -e
+            echo "🔄 Starting deploy..."
+            cd /var/www/ultron
+            git fetch origin
+            git reset --hard origin/main
+            git log -1 --pretty=format:"📝 Deploying: %h - %s"
+            if git diff HEAD@{1} HEAD --name-only | grep -qE "package(-lock)?\.json"; then
+              echo "📦 Installing dependencies..."
+              npm ci --production=false
+            fi
+            echo "🔨 Building..."
+            NODE_OPTIONS="--max-old-space-size=2048" npm run build
+            echo "🔁 Reloading PM2..."
+            pm2 reload ultron --update-env
+            echo "🩺 Health-Check..."
+            sleep 5
+            if ! curl -fs http://localhost:3000 > /dev/null 2>&1; then
+              echo "❌ ULTRON antwortet nicht!"
+              pm2 logs ultron --lines 30 --nostream
+              exit 1
+            fi
+            echo "✅ Deploy erfolgreich!"
+            pm2 status ultron
