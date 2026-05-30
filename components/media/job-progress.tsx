@@ -108,7 +108,7 @@ export default function JobProgress({ jobId, jobType, onComplete, onError }: Job
           ) : (
             <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />
           )}
-          <div className="text-sm font-medium truncate">
+          <div className="text-sm font-medium break-words min-w-0">
             {job?.phase_message || "Starte..."}
           </div>
         </div>
@@ -152,7 +152,7 @@ export default function JobProgress({ jobId, jobType, onComplete, onError }: Job
           {!nearMax && (
             <span>
               ℹ️ {jobType.startsWith("video") || jobType === "refine-video"
-                ? "Veo 2 liefert keinen Echtzeit-Fortschritt — der Balken ist eine Schätzung"
+                ? "Veo 3.1 liefert keinen Echtzeit-Fortschritt — der Balken ist eine Schätzung"
                 : "Generierung läuft im Hintergrund"}
             </span>
           )}

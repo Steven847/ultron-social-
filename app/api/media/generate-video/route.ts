@@ -25,8 +25,7 @@ export async function POST(req: NextRequest) {
       title,
       tags,
       startImageMediaId,
-      model = "cinematic",
-      generateAudio = true,
+      model = "fast",
       resolution,
     } = body;
 
@@ -35,10 +34,9 @@ export async function POST(req: NextRequest) {
     }
 
     jobType = startImageMediaId ? "video-i2v" : "video";
-    jobId = await createJob(brandId, jobType, { 
+    jobId = await createJob(brandId, jobType, {
       prompt: prompt.slice(0, 200),
       model,
-      generateAudio,
       resolution,
     });
 
@@ -53,7 +51,6 @@ export async function POST(req: NextRequest) {
       tags,
       startImageMediaId,
       model: model as VeoModel,
-      generateAudio,
       resolution,
     });
 
@@ -85,12 +82,11 @@ async function processVideoGeneration(params: {
   tags?: string;
   startImageMediaId?: string;
   model: VeoModel;
-  generateAudio: boolean;
   resolution?: "720p" | "1080p" | "4k";
 }) {
   const {
     jobId, jobType, brandId, prompt, aspectRatio, duration, title, tags,
-    startImageMediaId, model, generateAudio, resolution,
+    startImageMediaId, model, resolution,
   } = params;
   const supabase = getServerClient();
 
@@ -150,7 +146,6 @@ async function processVideoGeneration(params: {
     durationSeconds: (duration || 8) as 4 | 6 | 8,
     startImageBase64,
     startImageMimeType,
-    generateAudio,
     resolution,
   });
 
@@ -183,7 +178,6 @@ async function processVideoGeneration(params: {
     .filter(Boolean);
   if (startImageMediaId) tagArr.push("image-to-video");
   tagArr.push(`veo-3.1-${model}`);
-  if (generateAudio) tagArr.push("with-audio");
 
   const { data: mediaRow, error: insertError } = await supabase
     .from("media")

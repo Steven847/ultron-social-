@@ -230,12 +230,11 @@ export async function generateVideo(
     durationSeconds?: 4 | 6 | 8;
     startImageBase64?: string;
     startImageMimeType?: string;
-    generateAudio?: boolean; // NEW in Veo 3.1
-    resolution?: "720p" | "1080p" | "4k"; // NEW in Veo 3.1
+    resolution?: "720p" | "1080p" | "4k";
   }
 ): Promise<{ url: string; mimeType: string; fullPrompt: string; model: string }> {
   const apiKey = getApiKey();
-  const selectedModel = options?.model || "cinematic";
+  const selectedModel = options?.model || "fast";
   const modelId = VEO_MODELS[selectedModel];
 
   const isImageToVideo = !!(options?.startImageBase64 && options?.startImageMimeType);
@@ -255,19 +254,14 @@ export async function generateVideo(
     };
   }
 
-  // Veo 3.1 parameters
+  // Veo 3.1 parameters — audio is produced natively by the model and is NOT
+  // controlled via a `generateAudio` flag on this endpoint (the API rejects it).
   const parameters: any = {
     aspectRatio: options?.aspectRatio || "9:16",
     sampleCount: 1,
     durationSeconds: options?.durationSeconds || 8,
   };
 
-  // Veo 3.1 supports native audio generation
-  if (options?.generateAudio !== false) {
-    parameters.generateAudio = true;
-  }
-
-  // Resolution control (Veo 3.1)
   if (options?.resolution) {
     parameters.resolution = options.resolution;
   }

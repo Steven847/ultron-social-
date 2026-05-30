@@ -89,6 +89,7 @@ export default function GenerateDialog({ brandId, brandLogoUrl, defaultType = "i
   const [tags, setTags] = useState("");
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("1:1");
   const [videoDuration, setVideoDuration] = useState<4 | 6 | 8>(8);
+  const [videoModel, setVideoModel] = useState<"cinematic" | "fast" | "lite">("fast");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -220,6 +221,7 @@ export default function GenerateDialog({ brandId, brandLogoUrl, defaultType = "i
             aspectRatio: videoAspect,
             duration: videoDuration,
             startImageMediaId: startImageId || undefined,
+            model: videoModel,
           }),
         });
         const data = await res.json();
@@ -462,7 +464,7 @@ export default function GenerateDialog({ brandId, brandLogoUrl, defaultType = "i
                 }`}
               >
                 <Film className="w-4 h-4" />
-                <div className="text-sm">Video (Veo 2)</div>
+                <div className="text-sm">Video (Veo 3.1)</div>
               </button>
             </div>
 
@@ -679,6 +681,47 @@ export default function GenerateDialog({ brandId, brandLogoUrl, defaultType = "i
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {type === "video" && (
+              <div className="space-y-1">
+                <Label className="text-xs">Veo 3.1 Modell</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    { v: "fast", label: "Fast", hint: "Schnell, gute Qualität" },
+                    { v: "cinematic", label: "Cinematic", hint: "4K, premium, langsam" },
+                    { v: "lite", label: "Lite", hint: "Günstig, hohe Volumen" },
+                  ] as const).map((m) => (
+                    <button
+                      key={m.v}
+                      onClick={() => setVideoModel(m.v)}
+                      className={`px-2 py-2 text-xs rounded-md border transition-colors text-left ${
+                        videoModel === m.v
+                          ? "border-primary bg-primary/10"
+                          : "border-border hover:bg-accent"
+                      }`}
+                    >
+                      <div className="font-medium">{m.label}</div>
+                      <div className="text-[10px] text-muted-foreground">{m.hint}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {type === "video" && (
+              <div className="space-y-1">
+                <label className="flex items-center gap-2 opacity-50 cursor-not-allowed">
+                  <input
+                    type="checkbox"
+                    disabled
+                    className="w-4 h-4 accent-primary"
+                  />
+                  <span className="text-xs">
+                    Native Audio (coming soon — Veo 3.1 API unterstützt diesen Toggle aktuell noch nicht)
+                  </span>
+                </label>
               </div>
             )}
 
